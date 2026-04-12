@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Femmli &mdash; Availability</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap');
+
+:root {
+  --bg:#f6f5f0;--srf:#fff;--bdr:#e0ddd4;--bdrS:#c4c1b6;
+  --tx:#1a1916;--txM:#7a786e;--txF:#b2b0a8;
+  --ac:#2b5c3a;--acH:#1f4429;--acL:#e5f0e8;
+  --blue:#1a56a0;--blueL:#e8f0fb;
+  --sans:'DM Sans',sans-serif;--mono:'DM Mono',monospace;
+  --cw:46px;--ch:21px;--r:5px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:var(--sans);background:var(--bg);color:var(--tx);min-height:100vh;padding-bottom:60px;font-size:14px;}
+.shell{max-width:900px;margin:0 auto;padding:2rem 1.5rem;}
+
+.topbar{display:flex;align-items:center;gap:12px;margin-bottom:2.5rem;}
+.topbar::after{content:'';flex:1;height:1px;background:var(--bdr);}
+.logo{font-family:var(--mono);font-size:11px;letter-spacing:.13em;color:var(--txM);text-transform:uppercase;}
+
+.scr{display:none;}.scr.on{display:block;}
+h1{font-size:23px;font-weight:300;letter-spacing:-.02em;margin-bottom:4px;}
+.sub{font-size:13px;color:var(--txM);margin-bottom:1.75rem;line-height:1.6;}
+
+input[type=text]{
+  font-family:var(--sans);font-size:14px;padding:9px 13px;
+  border:1px solid var(--bdrS);border-radius:var(--r);
+  background:var(--srf);color:var(--tx);width:100%;max-width:280px;
+  outline:none;transition:border-color .15s,box-shadow .15s;
+}
+input:focus{border-color:var(--ac);box-shadow:0 0 0 3px rgba(43,92,58,.1);}
+
+.btn{
+  font-family:var(--sans);font-size:13px;font-weight:500;
+  padding:9px 16px;border-radius:var(--r);border:1px solid var(--bdrS);
+  background:var(--srf);color:var(--tx);cursor:pointer;
+  transition:all .12s;white-space:nowrap;line-height:1;display:inline-flex;align-items:center;gap:7px;
+}
+.btn:hover{border-color:var(--ac);background:var(--acL);color:var(--ac);}
+.btn.pri{background:var(--ac);color:#fff;border-color:var(--ac);}
+.btn.pri:hover{background:var(--acH);border-color:var(--acH);}
+.btn.gh{background:transparent;border-color:var(--bdr);color:var(--txM);}
+.btn.gh:hover{border-color:var(--bdrS);color:var(--tx);background:transparent;}
+.btn.sm{font-size:11px;padding:5px 10px;}
+.btn.google{background:#fff;border-color:#dadce0;color:#3c4043;}
+.btn.google:hover{background:#f8f9fa;border-color:#c4c7c5;}
+.btn.microsoft{background:#fff;border-color:#8c8c8c;color:#1a1a1a;}
+.btn.microsoft:hover{background:#f5f5f5;}
+.btn.connected{background:var(--acL);border-color:var(--ac);color:var(--ac);}
+.btn.connected:hover{background:#d5e8da;}
+.btn:disabled{opacity:.4;cursor:not-allowed;pointer-events:none;}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+
+/* calendar connect section */
+.cal-section{
+  background:var(--srf);border:1px solid var(--bdr);
+  border-radius:8px;padding:1.25rem;margin-bottom:1.5rem;
+}
+.cal-section h3{font-size:14px;font-weight:500;margin-bottom:4px;}
+.cal-section p{font-size:12px;color:var(--txM);margin-bottom:1rem;line-height:1.5;}
+.cal-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.cal-status{font-size:12px;font-family:var(--mono);margin-top:8px;}
+.cal-status.ok{color:var(--ac);}
+.cal-status.err{color:#a03030;}
+.cal-status.busy{color:var(--txM);}
+
+.divider{display:flex;align-items:center;gap:10px;margin:1.25rem 0;color:var(--txF);font-size:12px;font-family:var(--mono);}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--bdr);}
+
+/* grid */
+.gout{overflow-x:auto;margin:1.25rem 0;}
+table.g{border-collapse:collapse;}
+table.g th{font-family:var(--mono);font-size:11px;letter-spacing:.05em;color:var(--txM);padding:0 0 7px;text-align:center;width:var(--cw);font-weight:400;}
+table.g th.tl{width:54px;}
+table.g td.tl{font-family:var(--mono);font-size:10px;color:var(--txF);text-align:right;padding-right:8px;white-space:nowrap;vertical-align:middle;width:54px;user-select:none;}
+.cell{width:var(--cw);height:var(--ch);border:1px solid var(--bdr);cursor:pointer;background:var(--srf);transition:background .07s;user-select:none;position:relative;}
+.cell.on{background:var(--ac);border-color:var(--ac);}
+.cell.cal-busy{background:#e8e8e8;border-color:#d0d0d0;cursor:not-allowed;}
+.cell.cal-busy::after{content:'';position:absolute;inset:0;background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,.06) 3px,rgba(0,0,0,.06) 4px);}
+.cell:hover:not(.on):not(.cal-busy){background:var(--acL);border-color:#c5dccb;}
+.cell.ht{border-top-color:var(--bdrS);}
+
+.dcell{width:var(--cw);height:var(--ch);border:1px solid var(--bdr);position:relative;cursor:default;}
+.dcell.ht{border-top-color:var(--bdrS);}
+.tip{display:none;position:absolute;bottom:calc(100% + 5px);left:50%;transform:translateX(-50%);background:#1a1916;color:#fff;border-radius:4px;padding:6px 10px;font-size:11px;font-family:var(--mono);white-space:nowrap;z-index:50;pointer-events:none;line-height:1.6;}
+.dcell:hover .tip{display:block;}
+
+/* pills */
+.pills{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:1rem;}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:20px;font-size:12px;font-weight:500;border:1px solid var(--bdrS);background:var(--srf);color:var(--txM);cursor:pointer;transition:all .12s;user-select:none;}
+.pill:hover{border-color:var(--ac);color:var(--ac);}
+.pill.on{background:var(--ac);border-color:var(--ac);color:#fff;}
+.pill .rm{font-size:15px;line-height:1;opacity:.5;cursor:pointer;margin-left:2px;}
+.pill .rm:hover{opacity:1;}
+.pill .cal-dot{width:7px;height:7px;border-radius:50%;display:inline-block;}
+
+.fbar{display:flex;gap:10px;align-items:center;margin-bottom:1.25rem;flex-wrap:wrap;}
+.fbar label{font-size:11px;font-family:var(--mono);color:var(--txM);white-space:nowrap;}
+select{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid var(--bdrS);border-radius:var(--r);background:var(--srf);color:var(--tx);outline:none;cursor:pointer;}
+
+.leg{display:flex;gap:14px;align-items:center;margin-top:.75rem;flex-wrap:wrap;}
+.litem{display:flex;align-items:center;gap:5px;font-size:11px;font-family:var(--mono);color:var(--txM);}
+.lsw{width:13px;height:13px;border-radius:3px;border:1px solid rgba(0,0,0,.08);}
+
+.stline{font-size:12px;font-family:var(--mono);margin-top:10px;min-height:18px;}
+.stline.ok{color:var(--ac);}.stline.err{color:#a03030;}.stline.busy{color:var(--txM);}
+
+.stag{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--txF);margin-bottom:10px;display:flex;align-items:center;gap:8px;}
+.sc{font-size:11px;font-family:var(--mono);color:var(--txM);}
+.empty{text-align:center;padding:3rem;color:var(--txM);font-size:13px;}
+
+.info-box{background:var(--acL);border:1px solid #c5dccb;border-radius:var(--r);padding:.75rem 1rem;font-size:12px;color:var(--ac);margin-bottom:1.25rem;line-height:1.6;}
+.warn-box{background:#fff8e6;border:1px solid #e6d08c;border-radius:var(--r);padding:.75rem 1rem;font-size:12px;color:#7a6010;margin-bottom:1.25rem;line-height:1.6;}
+
+.bnav{position:fixed;bottom:0;left:0;right:0;background:rgba(246,245,240,.95);backdrop-filter:blur(8px);border-top:1px solid var(--bdr);z-index:100;}
+.binner{max-width:900px;margin:0 auto;display:flex;}
+.ntab{flex:1;font-family:var(--sans);font-size:13px;padding:12px 16px;background:none;border:none;border-top:2px solid transparent;cursor:pointer;color:var(--txM);transition:all .12s;}
+.ntab:hover{color:var(--tx);}
+.ntab.on{color:var(--ac);border-top-color:var(--ac);font-weight:500;}
+
+/* google icon */
+.gicon{width:16px;height:16px;flex-shrink:0;}
+.msicon{width:16px;height:16px;flex-shrink:0;}
+
+@media(max-width:600px){
+  :root{--cw:38px;--ch:19px;}
+  .shell{padding:1.25rem 1rem;}
+  h1{font-size:20px;}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar"><span class="logo">Femmli &mdash; Scheduling</span></div>
+
+  <!-- SUBMIT -->
+  <div id="s-submit" class="scr on">
+    <h1>Connect your calendar</h1>
+    <p class="sub">Sign in with Google or Microsoft to sync your real-time availability. Only busy/free status is shared — no event details, titles, or descriptions are ever visible to anyone.</p>
+
+    <div class="row" style="margin-bottom:1.25rem;">
+      <input type="text" id="nameIn" placeholder="Your name" maxlength="40" onkeydown="if(event.key==='Enter')initSubmit()"/>
+      <button class="btn pri" onclick="initSubmit()">Continue</button>
+    </div>
+
+    <div id="submit-body" style="display:none;">
+
+      <div class="cal-section">
+        <h3>Connect calendar</h3>
+        <p>Connect once and your availability stays up to date automatically. We only read free/busy status — no event details are ever accessed or stored.</p>
+        <div class="cal-btns">
+          <button class="btn google" id="gBtn" onclick="connectGoogle()">
+            <svg class="gicon" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Connect Google Calendar
+          </button>
+          <button class="btn microsoft" id="msBtn" onclick="connectMicrosoft()">
+            <svg class="msicon" viewBox="0 0 24 24"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#00a4ef" d="M13 1h10v10H13z"/><path fill="#7fba00" d="M1 13h10v10H1z"/><path fill="#ffb900" d="M13 13h10v10H13z"/></svg>
+            Connect Microsoft Calendar
+          </button>
+        </div>
+        <div id="calStatus" class="cal-status"></div>
+      </div>
+
+      <div class="divider">or set manually</div>
+
+      <p style="font-size:13px;color:var(--txM);margin-bottom:.75rem;">Don't use Google or Microsoft? Mark your availability manually below.</p>
+
+      <div id="manual-grid-wrap">
+        <div class="info-box" id="cal-info-box" style="display:none;">
+          Your calendar is connected. Hatched blocks are times you're already busy — they can't be selected. You can still add extra unavailable times manually below.
+        </div>
+        <div class="gout"><table class="g" id="stbl"></table></div>
+        <div class="row">
+          <button class="btn pri" id="sbtn" onclick="doSave()">Save availability</button>
+          <button class="btn gh" onclick="clearSub()">Clear manual</button>
+        </div>
+        <div id="sst" class="stline"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div id="s-dash" class="scr">
+    <h1>Availability dashboard</h1>
+    <p class="sub">Toggle people on/off to compare availability. Hover any cell to see who's free. Data refreshes from everyone's live calendars.</p>
+    <div id="dbody">
+      <div class="stag">
+        people
+        <button class="btn sm gh" onclick="pillAll(true)">all</button>
+        <button class="btn sm gh" onclick="pillAll(false)">none</button>
+        <span class="sc" id="scount"></span>
+        <button class="btn sm gh" style="margin-left:auto;" onclick="loadDash()">&#8635; Refresh</button>
+      </div>
+      <div class="pills" id="pillwrap"></div>
+      <div class="fbar">
+        <label>Min available:</label>
+        <select id="minsel" onchange="drawHeat()">
+          <option value="1">1+</option>
+          <option value="2">2+</option>
+          <option value="3">3+</option>
+          <option value="4">4+</option>
+          <option value="5">5+</option>
+        </select>
+        <label style="margin-left:8px;">Week of:</label>
+        <select id="weeksel" onchange="loadDash()"></select>
+      </div>
+      <div class="gout"><table class="g" id="dtbl"></table></div>
+      <div class="leg" id="leg"></div>
+    </div>
+    <div id="dempty" class="empty" style="display:none;">No availability data yet.</div>
+  </div>
+</div>
+
+<div class="bnav">
+  <div class="binner">
+    <button class="ntab on" id="nt-submit" onclick="go('submit')">My availability</button>
+    <button class="ntab" id="nt-dash" onclick="go('dash')">Dashboard</button>
+  </div>
+</div>
+
+<script>
+// ── Config ───────────────────────────────────────────────────
+const SB_URL = 'https://nmonucpefqvbuycpqtim.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5tb251Y3BlZnF2YnV5Y3BxdGltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MTIxMTEsImV4cCI6MjA5MTM4ODExMX0.Dqe_jurWQCSMC77Y-GHjcy7XSo0yAWJ6TSi5srHzmVo';
+const GOOGLE_CLIENT_ID = '935491588637-vle8b236a1ll25fngo8ldihvs8qmcs7i.apps.googleusercontent.com';
+const MS_CLIENT_ID = 'a5d16489-7bfa-4b23-9d42-245bfcfc8d94';
+const REDIRECT_URI = 'https://lortero7.github.io/femmli-scheduler';
+const SB_HEADERS = {'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY};
+const TABLE = `${SB_URL}/rest/v1/availability`;
+
+// ── Time constants ───────────────────────────────────────────
+const DAYS = ['Mon','Tue','Wed','Thu','Fri'];
+const SLOTS = [];
+for(let h=8;h<18;h++){SLOTS.push({h,m:0});SLOTS.push({h,m:30});}
+function fmt(h,m){const ap=h<12?'am':'pm';const hh=h>12?h-12:(h===0?12:h);return`${hh}:${m===0?'00':'30'}${ap}`;}
+
+// Get Mon–Fri dates for a given week offset (0=current, 1=next, etc.)
+function getWeekDates(offset=0){
+  const now=new Date();
+  const day=now.getDay();
+  const monday=new Date(now);
+  monday.setDate(now.getDate()-(day===0?6:day-1)+(offset*7));
+  monday.setHours(0,0,0,0);
+  return DAYS.map((_,i)=>{const d=new Date(monday);d.setDate(monday.getDate()+i);return d;});
+}
+
+function dateStr(d){return d.toISOString().split('T')[0];}
+function weekLabel(offset){
+  const dates=getWeekDates(offset);
+  return `${dates[0].toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${dates[4].toLocaleDateString('en-US',{month:'short',day:'numeric'})}`;
+}
+
+// Populate week selector
+function populateWeekSel(){
+  const sel=document.getElementById('weeksel');
+  sel.innerHTML='';
+  for(let i=0;i<4;i++){
+    const o=document.createElement('option');
+    o.value=i;
+    o.textContent=i===0?`This week (${weekLabel(0)})`:i===1?`Next week (${weekLabel(1)})`:weekLabel(i);
+    sel.appendChild(o);
+  }
+}
+
+// ── Heat colors ──────────────────────────────────────────────
+const HX=['#fff','#d1ead9','#9ecfb1','#5aaa7f','#2b5c3a'];
+function hx(n,t){if(!n||!t)return HX[0];return HX[Math.min(Math.ceil(n/t*(HX.length-1)),HX.length-1)];}
+
+// ── State ────────────────────────────────────────────────────
+let db={};
+let sel=new Set();
+let cname='';
+let drag=false,dmode=null;
+let calBusy={};      // { "si_di": true } — slots busy per calendar
+let calProvider='';  // 'google' | 'microsoft' | ''
+let googleToken='';
+let msToken='';
+
+// ── Supabase helpers ─────────────────────────────────────────
+async function sbGet(){
+  const r=await fetch(`${TABLE}?select=*`,{headers:SB_HEADERS});
+  if(!r.ok)throw new Error(await r.text());
+  return r.json();
+}
+async function sbUpsert(name,cells,google_busy,microsoft_busy,provider){
+  const r=await fetch(`${TABLE}?on_conflict=name`,{
+    method:'POST',
+    headers:{...SB_HEADERS,'Prefer':'resolution=merge-duplicates'},
+    body:JSON.stringify({name,cells:JSON.stringify(cells),google_busy:JSON.stringify(google_busy||{}),microsoft_busy:JSON.stringify(microsoft_busy||{}),cal_provider:provider||'',updated_at:new Date().toISOString()})
+  });
+  if(!r.ok)throw new Error(await r.text());
+}
+async function sbDelete(name){
+  const r=await fetch(`${TABLE}?name=eq.${encodeURIComponent(name)}`,{method:'DELETE',headers:SB_HEADERS});
+  if(!r.ok)throw new Error(await r.text());
+}
+
+// ── Google OAuth (implicit flow) ─────────────────────────────
+function connectGoogle(){
+  setCalSt('Redirecting to Google…','busy');
+  sessionStorage.setItem('femmli_name',cname);
+  sessionStorage.setItem('femmli_provider','google');
+  const scope=encodeURIComponent('https://www.googleapis.com/auth/calendar.freebusy');
+  const params=new URLSearchParams({
+    client_id:GOOGLE_CLIENT_ID,
+    redirect_uri:REDIRECT_URI,
+    response_type:'token',
+    scope:'https://www.googleapis.com/auth/calendar.freebusy',
+    state:'google'
+  });
+  window.location.href=`https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+}
+
+// ── Microsoft OAuth (implicit flow) ─────────────────────────
+function connectMicrosoft(){
+  setCalSt('Redirecting to Microsoft…','busy');
+  sessionStorage.setItem('femmli_name',cname);
+  sessionStorage.setItem('femmli_provider','microsoft');
+  const params=new URLSearchParams({
+    client_id:MS_CLIENT_ID,
+    redirect_uri:REDIRECT_URI,
+    response_type:'token',
+    scope:'https://graph.microsoft.com/Calendars.Read',
+    state:'microsoft'
+  });
+  window.location.href=`https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`;
+}
+
+// ── Handle OAuth redirect ────────────────────────────────────
+function handleOAuthRedirect(){
+  const hash=window.location.hash;
+  if(!hash||!hash.includes('access_token'))return false;
+  const params=new URLSearchParams(hash.slice(1));
+  const token=params.get('access_token');
+  const state=params.get('state');
+  if(!token)return false;
+  // Clean URL
+  history.replaceState(null,'',window.location.pathname);
+  // Restore name
+  const savedName=sessionStorage.getItem('femmli_name')||'';
+  const savedProvider=sessionStorage.getItem('femmli_provider')||state;
+  if(savedName){
+    cname=savedName;
+    document.getElementById('nameIn').value=savedName;
+  }
+  if(savedProvider==='google') googleToken=token;
+  if(savedProvider==='microsoft') msToken=token;
+  calProvider=savedProvider;
+  return true;
+}
+
+// ── Fetch free/busy from Google ──────────────────────────────
+async function fetchGoogleBusy(weekOffset){
+  const dates=getWeekDates(weekOffset);
+  const timeMin=new Date(dates[0]);timeMin.setHours(8,0,0,0);
+  const timeMax=new Date(dates[4]);timeMax.setHours(18,0,0,0);
+  const body={
+    timeMin:timeMin.toISOString(),
+    timeMax:timeMax.toISOString(),
+    timeZone:'America/Los_Angeles',
+    items:[{id:'primary'}]
+  };
+  const r=await fetch('https://www.googleapis.com/calendar/v3/freeBusy',{
+    method:'POST',
+    headers:{'Authorization':'Bearer '+googleToken,'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  if(!r.ok)throw new Error('Google API error: '+r.status);
+  const data=await r.json();
+  const busyPeriods=data.calendars?.primary?.busy||[];
+  return busyPeriodsToSlots(busyPeriods,dates);
+}
+
+// ── Fetch free/busy from Microsoft ──────────────────────────
+async function fetchMicrosoftBusy(weekOffset){
+  const dates=getWeekDates(weekOffset);
+  const timeMin=new Date(dates[0]);timeMin.setHours(8,0,0,0);
+  const timeMax=new Date(dates[4]);timeMax.setHours(18,0,0,0);
+  const body={
+    schedules:['me'],
+    startTime:{dateTime:timeMin.toISOString(),timeZone:'Pacific Standard Time'},
+    endTime:{dateTime:timeMax.toISOString(),timeZone:'Pacific Standard Time'},
+    availabilityViewInterval:30
+  };
+  const r=await fetch('https://graph.microsoft.com/v1.0/me/calendar/getSchedule',{
+    method:'POST',
+    headers:{'Authorization':'Bearer '+msToken,'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  if(!r.ok)throw new Error('Microsoft API error: '+r.status);
+  const data=await r.json();
+  const busyPeriods=[];
+  (data.value||[]).forEach(schedule=>{
+    (schedule.scheduleItems||[]).forEach(item=>{
+      if(item.status==='busy'||item.status==='tentative'||item.status==='oof'){
+        busyPeriods.push({start:item.start.dateTime,end:item.end.dateTime});
+      }
+    });
+  });
+  return busyPeriodsToSlots(busyPeriods,dates);
+}
+
+// ── Convert busy periods to slot keys ───────────────────────
+function busyPeriodsToSlots(periods,dates){
+  const busy={};
+  periods.forEach(p=>{
+    const start=new Date(p.start);
+    const end=new Date(p.end);
+    dates.forEach((date,di)=>{
+      SLOTS.forEach((slot,si)=>{
+        const slotStart=new Date(date);
+        slotStart.setHours(slot.h,slot.m,0,0);
+        const slotEnd=new Date(slotStart);
+        slotEnd.setMinutes(slotEnd.getMinutes()+30);
+        if(slotStart<end&&slotEnd>start){
+          busy[si+'_'+di]=true;
+        }
+      });
+    });
+  });
+  return busy;
+}
+
+// ── Submit screen ────────────────────────────────────────────
+function initSubmit(){
+  const n=document.getElementById('nameIn').value.trim();
+  if(!n){document.getElementById('nameIn').focus();return;}
+  cname=n;
+  buildSGrid(0);
+  const ex=db[n.toLowerCase()];
+  if(ex&&ex.cells)loadSCells(typeof ex.cells==='string'?JSON.parse(ex.cells):ex.cells);
+  document.getElementById('submit-body').style.display='block';
+  setSt('sst',ex?'Loaded your saved availability.':'','ok');
+  updateCalBtns();
+}
+
+function updateCalBtns(){
+  const gBtn=document.getElementById('gBtn');
+  const msBtn=document.getElementById('msBtn');
+  if(calProvider==='google'){
+    gBtn.className='btn connected';
+    gBtn.innerHTML=`<svg class="gicon" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg> Google connected ✓`;
+  }
+  if(calProvider==='microsoft'){
+    msBtn.className='btn connected';
+    msBtn.innerHTML=`<svg class="msicon" viewBox="0 0 24 24"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#00a4ef" d="M13 1h10v10H13z"/><path fill="#7fba00" d="M1 13h10v10H1z"/><path fill="#ffb900" d="M13 13h10v10H13z"/></svg> Microsoft connected ✓`;
+  }
+}
+
+function buildSGrid(weekOffset){
+  const dates=getWeekDates(weekOffset);
+  const t=document.getElementById('stbl');
+  t.innerHTML='';
+  const hr=t.createTHead().insertRow();
+  mkTH(hr,'tl','');
+  dates.forEach((d,i)=>{
+    const label=DAYS[i]+' '+d.toLocaleDateString('en-US',{month:'numeric',day:'numeric'});
+    mkTH(hr,'',label);
+  });
+  const tb=t.createTBody();
+  SLOTS.forEach((s,si)=>{
+    const r=tb.insertRow();
+    const tl=document.createElement('td');
+    tl.className='tl';tl.textContent=s.m===0?fmt(s.h,s.m):'';
+    r.appendChild(tl);
+    DAYS.forEach((_,di)=>{
+      const c=document.createElement('td');
+      const isBusy=calBusy[si+'_'+di];
+      c.className='cell'+(s.m===0?' ht':'')+(isBusy?' cal-busy':'');
+      c.dataset.si=si;c.dataset.di=di;
+      if(!isBusy){
+        c.addEventListener('mousedown',e=>{e.preventDefault();drag=true;dmode=c.classList.contains('on')?'off':'on';tog(c);});
+        c.addEventListener('mouseover',()=>{if(drag)tog(c,dmode);});
+      }
+      r.appendChild(c);
+    });
+  });
+  document.addEventListener('mouseup',()=>{drag=false;dmode=null;});
+}
+
+function mkTH(row,cls,txt){const th=document.createElement('th');if(cls)th.className=cls;th.textContent=txt;row.appendChild(th);}
+function tog(c,m){const md=m||(c.classList.contains('on')?'off':'on');c.classList.toggle('on',md==='on');}
+function loadSCells(cells){document.querySelectorAll('#stbl .cell:not(.cal-busy)').forEach(c=>c.classList.toggle('on',!!cells[c.dataset.si+'_'+c.dataset.di]));}
+function clearSub(){document.querySelectorAll('#stbl .cell:not(.cal-busy)').forEach(c=>c.classList.remove('on'));}
+function getSCells(){const o={};document.querySelectorAll('#stbl .cell:not(.cal-busy)').forEach(c=>{if(c.classList.contains('on'))o[c.dataset.si+'_'+c.dataset.di]=true;});return o;}
+
+async function doSave(){
+  const btn=document.getElementById('sbtn');
+  btn.disabled=true;
+  setSt('sst','Saving…','busy');
+  try{
+    const cells=getSCells();
+    const gBusy=calProvider==='google'?calBusy:{};
+    const msBusy=calProvider==='microsoft'?calBusy:{};
+    await sbUpsert(cname,cells,gBusy,msBusy,calProvider);
+    db[cname.toLowerCase()]={name:cname,cells,google_busy:gBusy,microsoft_busy:msBusy,cal_provider:calProvider};
+    setSt('sst','Saved! Your availability is live on the dashboard.','ok');
+  }catch(e){
+    setSt('sst','Error: '+e.message,'err');
+  }
+  btn.disabled=false;
+}
+
+function setSt(id,msg,cls){const e=document.getElementById(id);e.textContent=msg;e.className='stline'+(cls?' '+cls:'');}
+function setCalSt(msg,cls){const e=document.getElementById('calStatus');e.textContent=msg;e.className='cal-status'+(cls?' '+cls:'');}
+
+// ── Dashboard ────────────────────────────────────────────────
+async function loadDash(){
+  try{
+    const rows=await sbGet();
+    db={};
+    rows.forEach(row=>{
+      const parse=v=>typeof v==='string'?JSON.parse(v||'{}'):(v||{});
+      db[row.name.toLowerCase()]={
+        name:row.name,
+        cells:parse(row.cells),
+        google_busy:parse(row.google_busy),
+        microsoft_busy:parse(row.microsoft_busy),
+        cal_provider:row.cal_provider||''
+      };
+    });
+  }catch(e){console.error(e);}
+  renderDash();
+}
+
+function getMergedBusy(person){
+  const cells=person.cells||{};
+  const gb=person.google_busy||{};
+  const mb=person.microsoft_busy||{};
+  const merged={};
+  // busy = calendar says busy OR manual says NOT available (cell not selected)
+  // A slot is "available" only if: not in cal_busy AND (no calendar connected OR manual says free)
+  // For heatmap: available = not busy
+  Object.keys({...gb,...mb}).forEach(k=>merged[k]=true);
+  return merged;
+}
+
+function isAvailable(person,key){
+  const calBusySlots=getMergedBusy(person);
+  if(calBusySlots[key])return false;
+  // If they have a calendar connected, trust it fully (not busy = available)
+  if(person.cal_provider)return true;
+  // Manual: only available if they explicitly marked it
+  return !!(person.cells&&person.cells[key]);
+}
+
+function renderDash(){
+  const ppl=Object.values(db);
+  if(!ppl.length){
+    document.getElementById('dbody').style.display='none';
+    document.getElementById('dempty').style.display='block';
+    return;
+  }
+  document.getElementById('dbody').style.display='block';
+  document.getElementById('dempty').style.display='none';
+  const names=new Set(ppl.map(p=>p.name));
+  [...sel].forEach(n=>{if(!names.has(n))sel.delete(n);});
+  names.forEach(n=>sel.add(n));
+  buildPills(ppl);
+  drawHeat();
+}
+
+function buildPills(ppl){
+  const w=document.getElementById('pillwrap');
+  w.innerHTML='';
+  ppl.forEach(p=>{
+    const pill=document.createElement('div');
+    pill.className='pill'+(sel.has(p.name)?' on':'');
+    const dot=document.createElement('span');
+    dot.className='cal-dot';
+    dot.style.background=p.cal_provider==='google'?'#4285F4':p.cal_provider==='microsoft'?'#00a4ef':'#b2b0a8';
+    dot.title=p.cal_provider?p.cal_provider+' calendar':'manual';
+    const sp=document.createElement('span');sp.textContent=p.name;
+    const rm=document.createElement('span');rm.className='rm';rm.textContent='×';
+    pill.append(dot,sp,rm);
+    sp.addEventListener('click',()=>{
+      sel.has(p.name)?sel.delete(p.name):sel.add(p.name);
+      pill.classList.toggle('on',sel.has(p.name));
+      drawHeat();updSC();
+    });
+    dot.addEventListener('click',()=>{
+      sel.has(p.name)?sel.delete(p.name):sel.add(p.name);
+      pill.classList.toggle('on',sel.has(p.name));
+      drawHeat();updSC();
+    });
+    rm.addEventListener('click',async e=>{
+      e.stopPropagation();
+      if(!confirm(`Remove ${p.name}?`))return;
+      try{await sbDelete(p.name);delete db[p.name.toLowerCase()];sel.delete(p.name);renderDash();}
+      catch(err){alert('Error: '+err.message);}
+    });
+    w.appendChild(pill);
+  });
+  updSC();
+}
+
+function updSC(){document.getElementById('scount').textContent=`${sel.size}/${Object.keys(db).length} shown`;}
+function pillAll(on){Object.values(db).forEach(p=>on?sel.add(p.name):sel.delete(p.name));document.querySelectorAll('.pill').forEach(p=>p.classList.toggle('on',on));drawHeat();updSC();}
+
+function drawHeat(){
+  const minN=parseInt(document.getElementById('minsel').value);
+  const weekOffset=parseInt(document.getElementById('weeksel').value||'0');
+  const sub=Object.values(db).filter(p=>sel.has(p.name));
+  const tot=sub.length;
+  const t=document.getElementById('dtbl');
+  t.innerHTML='';
+  const dates=getWeekDates(weekOffset);
+  const hr=t.createTHead().insertRow();
+  mkTH(hr,'tl','');
+  dates.forEach((d,i)=>{
+    const label=DAYS[i]+' '+d.toLocaleDateString('en-US',{month:'numeric',day:'numeric'});
+    mkTH(hr,'',label);
+  });
+  const tb=t.createTBody();
+  SLOTS.forEach((s,si)=>{
+    const r=tb.insertRow();
+    const tl=document.createElement('td');tl.className='tl';tl.textContent=s.m===0?fmt(s.h,s.m):'';
+    r.appendChild(tl);
+    DAYS.forEach((_,di)=>{
+      const key=si+'_'+di;
+      const av=sub.filter(p=>isAvailable(p,key));
+      const n=av.length;
+      const td=document.createElement('td');
+      td.className='dcell'+(s.m===0?' ht':'');
+      const show=n>=minN;
+      td.style.background=show?hx(n,tot):'var(--bg)';
+      td.style.opacity=show?'1':'0.2';
+      if(n>0){
+        const tip=document.createElement('div');
+        tip.className='tip';
+        tip.innerHTML=`<strong>${n}/${tot} free</strong><br>${av.map(p=>p.name).join(', ')}`;
+        td.appendChild(tip);
+      }
+      r.appendChild(td);
+    });
+  });
+  const leg=document.getElementById('leg');leg.innerHTML='';
+  [{c:HX[1],l:'low'},{c:HX[2],l:'medium'},{c:HX[3],l:'high'},{c:HX[4],l:'everyone'}].forEach(s=>{
+    const d=document.createElement('div');d.className='litem';
+    d.innerHTML=`<div class="lsw" style="background:${s.c}"></div>${s.l}`;
+    leg.appendChild(d);
+  });
+}
+
+// ── Nav ──────────────────────────────────────────────────────
+function go(id){
+  document.querySelectorAll('.scr').forEach(s=>s.classList.remove('on'));
+  document.getElementById('s-'+id).classList.add('on');
+  document.querySelectorAll('.ntab').forEach(t=>t.classList.remove('on'));
+  document.getElementById('nt-'+id).classList.add('on');
+  if(id==='dash')loadDash();
+}
+
+// ── Init ─────────────────────────────────────────────────────
+async function init(){
+  populateWeekSel();
+
+  // Pre-load db
+  try{
+    const rows=await sbGet();
+    rows.forEach(row=>{
+      const parse=v=>typeof v==='string'?JSON.parse(v||'{}'):(v||{});
+      db[row.name.toLowerCase()]={
+        name:row.name,
+        cells:parse(row.cells),
+        google_busy:parse(row.google_busy),
+        microsoft_busy:parse(row.microsoft_busy),
+        cal_provider:row.cal_provider||''
+      };
+    });
+  }catch(e){}
+
+  // Handle OAuth redirect
+  const wasRedirect=handleOAuthRedirect();
+  if(wasRedirect){
+    document.getElementById('submit-body').style.display='block';
+    buildSGrid(0);
+    updateCalBtns();
+    // Fetch calendar busy slots
+    if(calProvider==='google'&&googleToken){
+      setCalSt('Fetching your Google Calendar…','busy');
+      try{
+        calBusy=await fetchGoogleBusy(0);
+        document.getElementById('cal-info-box').style.display='block';
+        buildSGrid(0); // rebuild with busy slots marked
+        const ex=db[cname.toLowerCase()];
+        if(ex&&ex.cells)loadSCells(typeof ex.cells==='string'?JSON.parse(ex.cells):ex.cells);
+        setCalSt(`Connected — ${Object.keys(calBusy).length} busy slots found this week.`,'ok');
+      }catch(e){
+        setCalSt('Could not fetch calendar: '+e.message,'err');
+      }
+    }
+    if(calProvider==='microsoft'&&msToken){
+      setCalSt('Fetching your Microsoft Calendar…','busy');
+      try{
+        calBusy=await fetchMicrosoftBusy(0);
+        document.getElementById('cal-info-box').style.display='block';
+        buildSGrid(0);
+        const ex=db[cname.toLowerCase()];
+        if(ex&&ex.cells)loadSCells(typeof ex.cells==='string'?JSON.parse(ex.cells):ex.cells);
+        setCalSt(`Connected — ${Object.keys(calBusy).length} busy slots found this week.`,'ok');
+      }catch(e){
+        setCalSt('Could not fetch calendar: '+e.message,'err');
+      }
+    }
+  } else {
+    buildSGrid(0);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
