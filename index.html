@@ -334,23 +334,43 @@ function connectMicrosoft(){
 // ── Handle OAuth redirect ────────────────────────────────────
 function handleOAuthRedirect(){
   const hash=window.location.hash;
-  if(!hash||!hash.includes('access_token'))return false;
+  if(!hash)return false;
   const params=new URLSearchParams(hash.slice(1));
+  const isSilent=sessionStorage.getItem('femmli_silent')==='1';
+
+  // Silent re-auth failed — need user to reconnect manually
+  if(params.get('error')){
+    history.replaceState(null,'',window.location.pathname);
+    sessionStorage.removeItem('femmli_silent');
+    if(isSilent){
+      const name=localStorage.getItem('femmli_name');
+      const provider=localStorage.getItem('femmli_provider');
+      if(name){
+        cname=name;calProvider=provider||'';
+        document.getElementById('nameIn').value=name;
+        document.getElementById('submit-body').style.display='block';
+        buildSGrid(0);
+        setSt('sst','Calendar session expired — please reconnect your calendar.','err');
+      }
+      localStorage.removeItem('femmli_token');
+      localStorage.removeItem('femmli_token_expiry');
+    }
+    return 'error';
+  }
+
+  if(!hash.includes('access_token'))return false;
   const token=params.get('access_token');
   const state=params.get('state');
   const expiresIn=parseInt(params.get('expires_in')||'3600');
   if(!token)return false;
   history.replaceState(null,'',window.location.pathname);
-  const savedName=sessionStorage.getItem('femmli_name')||'';
+  sessionStorage.removeItem('femmli_silent');
+  const savedName=sessionStorage.getItem('femmli_name')||localStorage.getItem('femmli_name')||'';
   const savedProvider=sessionStorage.getItem('femmli_provider')||state;
-  if(savedName){
-    cname=savedName;
-    document.getElementById('nameIn').value=savedName;
-  }
-  if(savedProvider==='google') googleToken=token;
-  if(savedProvider==='microsoft') msToken=token;
+  if(savedName){cname=savedName;document.getElementById('nameIn').value=savedName;}
+  if(savedProvider==='google')googleToken=token;
+  if(savedProvider==='microsoft')msToken=token;
   calProvider=savedProvider;
-  // Persist token so it survives page refresh
   localStorage.setItem('femmli_token',token);
   localStorage.setItem('femmli_provider',savedProvider);
   localStorage.setItem('femmli_name',savedName);
@@ -364,8 +384,26 @@ function loadStoredAuth(){
   const name=localStorage.getItem('femmli_name');
   const expiry=parseInt(localStorage.getItem('femmli_token_expiry')||'0');
   if(!token||!provider||!name)return null;
-  if(Date.now()>expiry-60000){clearStoredAuth();return null;}
+  if(Date.now()>expiry-60000)return null; // expired but keep name/provider for silent reauth
   return{token,provider,name};
+}
+
+// Attempt silent re-auth (no login screen) using prompt=none
+function trySilentReAuth(){
+  const provider=localStorage.getItem('femmli_provider');
+  const name=localStorage.getItem('femmli_name');
+  if(!provider||!name)return false;
+  sessionStorage.setItem('femmli_name',name);
+  sessionStorage.setItem('femmli_provider',provider);
+  sessionStorage.setItem('femmli_silent','1');
+  if(provider==='google'){
+    const p=new URLSearchParams({client_id:GOOGLE_CLIENT_ID,redirect_uri:REDIRECT_URI,response_type:'token',scope:'https://www.googleapis.com/auth/calendar.freebusy',state:'google',prompt:'none'});
+    window.location.href=`https://accounts.google.com/o/oauth2/v2/auth?${p}`;
+  }else if(provider==='microsoft'){
+    const p=new URLSearchParams({client_id:MS_CLIENT_ID,redirect_uri:REDIRECT_URI,response_type:'token',scope:'https://graph.microsoft.com/Calendars.Read',state:'microsoft',prompt:'none'});
+    window.location.href=`https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${p}`;
+  }
+  return true;
 }
 
 function clearStoredAuth(){
@@ -529,6 +567,11 @@ function setCalSt(msg,cls){const e=document.getElementById('calStatus');e.textCo
 
 // ── Dashboard ────────────────────────────────────────────────
 async function loadDash(){
+  // Re-fetch this device's calendar before reloading dashboard
+  if(calProvider&&(googleToken||msToken)){
+    const stored=loadStoredAuth();
+    if(stored)await fetchAndSaveCal(parseInt(document.getElementById('weeksel').value||'0'));
+  }
   try{
     const rows=await sbGet();
     db={};
@@ -725,22 +768,27 @@ async function init(){
   }catch(e){}
 
   const wasRedirect=handleOAuthRedirect();
-  if(wasRedirect){
+  if(wasRedirect==='error'){
+    // Already handled in handleOAuthRedirect — grid already built
+  }else if(wasRedirect){
     document.getElementById('submit-body').style.display='block';
     updateCalBtns();
     await fetchAndSaveCal(0);
   }else{
-    // Restore from localStorage if token still valid
     const stored=loadStoredAuth();
     if(stored){
-      cname=stored.name;
-      calProvider=stored.provider;
+      // Valid token — restore session
+      cname=stored.name;calProvider=stored.provider;
       if(stored.provider==='google')googleToken=stored.token;
       if(stored.provider==='microsoft')msToken=stored.token;
       document.getElementById('nameIn').value=stored.name;
       document.getElementById('submit-body').style.display='block';
       updateCalBtns();
       await fetchAndSaveCal(0);
+    }else if(localStorage.getItem('femmli_provider')&&localStorage.getItem('femmli_name')){
+      // Token expired but credentials exist — try silent re-auth (no login screen)
+      trySilentReAuth(); // redirects; page will reload
+      return;
     }else{
       buildSGrid(0);
     }
