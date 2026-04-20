@@ -1,0 +1,254 @@
+const express = require('express');
+const cors = require('cors');
+const app = express();
+
+app.use(cors({ origin: process.env.FRONTEND_URL || 'https://lortero7.github.io' }));
+app.use(express.json());
+
+const {
+  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+  MS_CLIENT_ID, MS_CLIENT_SECRET,
+  SUPABASE_URL, SUPABASE_SERVICE_KEY,
+  BACKEND_URL,
+  FRONTEND_URL = 'https://lortero7.github.io/femmli-scheduler',
+  PORT = 3000
+} = process.env;
+
+const GOOGLE_REDIRECT = `${BACKEND_URL}/auth/google/callback`;
+const MS_REDIRECT = `${BACKEND_URL}/auth/microsoft/callback`;
+
+// ── Supabase (service role — bypasses RLS) ───────────────────
+const sbHeaders = {
+  'Content-Type': 'application/json',
+  'apikey': SUPABASE_SERVICE_KEY,
+  'Authorization': 'Bearer ' + SUPABASE_SERVICE_KEY
+};
+
+async function sbFetch(path, opts = {}) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: sbHeaders, ...opts });
+  if (!r.ok) throw new Error(`Supabase ${path}: ${await r.text()}`);
+  return r.json();
+}
+
+async function saveToken(name, provider, refreshToken) {
+  await fetch(`${SUPABASE_URL}/rest/v1/tokens?on_conflict=name`, {
+    method: 'POST',
+    headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
+    body: JSON.stringify({ name, provider, refresh_token: refreshToken, updated_at: new Date().toISOString() })
+  });
+}
+
+async function getAllTokens() {
+  return sbFetch('tokens?select=name,provider,refresh_token');
+}
+
+async function saveAvailability(name, provider, busyWeeks) {
+  const col = provider === 'google' ? 'google_busy' : 'microsoft_busy';
+  await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=name`, {
+    method: 'POST',
+    headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
+    body: JSON.stringify({
+      name,
+      cal_provider: provider,
+      [col]: JSON.stringify(busyWeeks),
+      updated_at: new Date().toISOString()
+    })
+  });
+}
+
+// ── Calendar helpers ─────────────────────────────────────────
+const SLOTS = [];
+for (let h = 8; h < 18; h++) { SLOTS.push({ h, m: 0 }); SLOTS.push({ h, m: 30 }); }
+
+function getWeekDates(offset = 0) {
+  const now = new Date();
+  const day = now.getDay();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1) + (offset * 7));
+  monday.setHours(0, 0, 0, 0);
+  return [0, 1, 2, 3, 4].map(i => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
+}
+
+function busyPeriodsToSlots(periods, dates) {
+  const busy = {};
+  periods.forEach(p => {
+    const start = new Date(p.start);
+    const end = new Date(p.end);
+    dates.forEach((date, di) => {
+      SLOTS.forEach((slot, si) => {
+        const slotStart = new Date(date); slotStart.setHours(slot.h, slot.m, 0, 0);
+        const slotEnd = new Date(slotStart); slotEnd.setMinutes(slotEnd.getMinutes() + 30);
+        if (slotStart < end && slotEnd > start) busy[`${si}_${di}`] = true;
+      });
+    });
+  });
+  return busy;
+}
+
+async function fetchGoogleBusy(accessToken, weekOffset) {
+  const dates = getWeekDates(weekOffset);
+  const timeMin = new Date(dates[0]); timeMin.setHours(8, 0, 0, 0);
+  const timeMax = new Date(dates[4]); timeMax.setHours(18, 0, 0, 0);
+  const r = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), timeZone: 'America/Los_Angeles', items: [{ id: 'primary' }] })
+  });
+  if (!r.ok) throw new Error('Google freeBusy: ' + r.status);
+  const data = await r.json();
+  return busyPeriodsToSlots(data.calendars?.primary?.busy || [], dates);
+}
+
+async function fetchMicrosoftBusy(accessToken, weekOffset) {
+  const dates = getWeekDates(weekOffset);
+  const timeMin = new Date(dates[0]); timeMin.setHours(8, 0, 0, 0);
+  const timeMax = new Date(dates[4]); timeMax.setHours(18, 0, 0, 0);
+  const r = await fetch('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      schedules: ['me'],
+      startTime: { dateTime: timeMin.toISOString(), timeZone: 'Pacific Standard Time' },
+      endTime: { dateTime: timeMax.toISOString(), timeZone: 'Pacific Standard Time' },
+      availabilityViewInterval: 30
+    })
+  });
+  if (!r.ok) throw new Error('Microsoft getSchedule: ' + r.status);
+  const data = await r.json();
+  const periods = [];
+  (data.value || []).forEach(s => (s.scheduleItems || []).forEach(item => {
+    if (['busy', 'tentative', 'oof'].includes(item.status))
+      periods.push({ start: item.start.dateTime, end: item.end.dateTime });
+  }));
+  return busyPeriodsToSlots(periods, dates);
+}
+
+// Fetch all 4 weeks for a user and save to Supabase
+async function refreshUser(name, provider, accessToken) {
+  const busyWeeks = {};
+  for (let i = 0; i < 4; i++) {
+    busyWeeks[i] = provider === 'google'
+      ? await fetchGoogleBusy(accessToken, i)
+      : await fetchMicrosoftBusy(accessToken, i);
+  }
+  await saveAvailability(name, provider, busyWeeks);
+}
+
+// ── Token refresh ────────────────────────────────────────────
+async function getNewGoogleToken(refreshToken) {
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, refresh_token: refreshToken, grant_type: 'refresh_token' })
+  });
+  const data = await r.json();
+  if (!data.access_token) throw new Error(data.error_description || 'Google token refresh failed');
+  return data.access_token;
+}
+
+async function getNewMicrosoftToken(refreshToken) {
+  const r = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: MS_CLIENT_ID, client_secret: MS_CLIENT_SECRET, refresh_token: refreshToken, grant_type: 'refresh_token', scope: 'https://graph.microsoft.com/Calendars.Read offline_access' })
+  });
+  const data = await r.json();
+  if (!data.access_token) throw new Error(data.error_description || 'Microsoft token refresh failed');
+  return data.access_token;
+}
+
+// ── Google OAuth ─────────────────────────────────────────────
+app.get('/auth/google', (req, res) => {
+  const { name } = req.query;
+  if (!name) return res.status(400).send('Missing name');
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: GOOGLE_REDIRECT,
+    response_type: 'code',
+    scope: 'https://www.googleapis.com/auth/calendar.freebusy',
+    access_type: 'offline',
+    prompt: 'consent',
+    state: name
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+app.get('/auth/google/callback', async (req, res) => {
+  const { code, state: name, error } = req.query;
+  if (error) return res.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name || '')}`);
+  try {
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, redirect_uri: GOOGLE_REDIRECT, grant_type: 'authorization_code' })
+    });
+    const tokens = await tokenRes.json();
+    if (!tokens.refresh_token) throw new Error('No refresh token returned — ensure prompt=consent');
+    await saveToken(name, 'google', tokens.refresh_token);
+    await refreshUser(name, 'google', tokens.access_token);
+    res.redirect(`${FRONTEND_URL}?connected=google&name=${encodeURIComponent(name)}`);
+  } catch (e) {
+    console.error('Google callback error:', e);
+    res.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(e.message)}&name=${encodeURIComponent(name)}`);
+  }
+});
+
+// ── Microsoft OAuth ──────────────────────────────────────────
+app.get('/auth/microsoft', (req, res) => {
+  const { name } = req.query;
+  if (!name) return res.status(400).send('Missing name');
+  const params = new URLSearchParams({
+    client_id: MS_CLIENT_ID,
+    redirect_uri: MS_REDIRECT,
+    response_type: 'code',
+    scope: 'https://graph.microsoft.com/Calendars.Read offline_access',
+    state: name
+  });
+  res.redirect(`https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`);
+});
+
+app.get('/auth/microsoft/callback', async (req, res) => {
+  const { code, state: name, error } = req.query;
+  if (error) return res.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name || '')}`);
+  try {
+    const tokenRes = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: MS_CLIENT_ID, client_secret: MS_CLIENT_SECRET, redirect_uri: MS_REDIRECT, grant_type: 'authorization_code', scope: 'https://graph.microsoft.com/Calendars.Read offline_access' })
+    });
+    const tokens = await tokenRes.json();
+    if (!tokens.refresh_token) throw new Error('No refresh token returned');
+    await saveToken(name, 'microsoft', tokens.refresh_token);
+    await refreshUser(name, 'microsoft', tokens.access_token);
+    res.redirect(`${FRONTEND_URL}?connected=microsoft&name=${encodeURIComponent(name)}`);
+  } catch (e) {
+    console.error('Microsoft callback error:', e);
+    res.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(e.message)}&name=${encodeURIComponent(name)}`);
+  }
+});
+
+// ── Refresh all calendars ────────────────────────────────────
+app.post('/api/refresh', async (req, res) => {
+  try {
+    const tokenRows = await getAllTokens();
+    const results = await Promise.all(tokenRows.map(async row => {
+      try {
+        const accessToken = row.provider === 'google'
+          ? await getNewGoogleToken(row.refresh_token)
+          : await getNewMicrosoftToken(row.refresh_token);
+        await refreshUser(row.name, row.provider, accessToken);
+        return { name: row.name, ok: true };
+      } catch (e) {
+        console.error(`Refresh failed for ${row.name}:`, e.message);
+        return { name: row.name, ok: false, error: e.message };
+      }
+    }));
+    res.json({ results });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/health', (_, res) => res.json({ ok: true }));
+
+app.listen(PORT, () => console.log(`Femmli backend listening on port ${PORT}`));
