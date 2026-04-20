@@ -338,10 +338,9 @@ function handleOAuthRedirect(){
   const params=new URLSearchParams(hash.slice(1));
   const token=params.get('access_token');
   const state=params.get('state');
+  const expiresIn=parseInt(params.get('expires_in')||'3600');
   if(!token)return false;
-  // Clean URL
   history.replaceState(null,'',window.location.pathname);
-  // Restore name
   const savedName=sessionStorage.getItem('femmli_name')||'';
   const savedProvider=sessionStorage.getItem('femmli_provider')||state;
   if(savedName){
@@ -351,7 +350,26 @@ function handleOAuthRedirect(){
   if(savedProvider==='google') googleToken=token;
   if(savedProvider==='microsoft') msToken=token;
   calProvider=savedProvider;
+  // Persist token so it survives page refresh
+  localStorage.setItem('femmli_token',token);
+  localStorage.setItem('femmli_provider',savedProvider);
+  localStorage.setItem('femmli_name',savedName);
+  localStorage.setItem('femmli_token_expiry',(Date.now()+expiresIn*1000).toString());
   return true;
+}
+
+function loadStoredAuth(){
+  const token=localStorage.getItem('femmli_token');
+  const provider=localStorage.getItem('femmli_provider');
+  const name=localStorage.getItem('femmli_name');
+  const expiry=parseInt(localStorage.getItem('femmli_token_expiry')||'0');
+  if(!token||!provider||!name)return null;
+  if(Date.now()>expiry-60000){clearStoredAuth();return null;}
+  return{token,provider,name};
+}
+
+function clearStoredAuth(){
+  ['femmli_token','femmli_provider','femmli_name','femmli_token_expiry'].forEach(k=>localStorage.removeItem(k));
 }
 
 // ── Fetch free/busy from Google ──────────────────────────────
@@ -656,11 +674,42 @@ function go(id){
   if(id==='dash')loadDash();
 }
 
+// ── Fetch calendar + auto-save ───────────────────────────────
+async function fetchAndSaveCal(weekOffset=0){
+  try{
+    if(calProvider==='google'&&googleToken){
+      setCalSt('Fetching your Google Calendar…','busy');
+      calBusy=await fetchGoogleBusy(weekOffset);
+    }else if(calProvider==='microsoft'&&msToken){
+      setCalSt('Fetching your Microsoft Calendar…','busy');
+      calBusy=await fetchMicrosoftBusy(weekOffset);
+    }else return;
+    document.getElementById('cal-info-box').style.display='block';
+    buildSGrid(weekOffset);
+    const ex=db[cname.toLowerCase()];
+    if(ex&&ex.cells)loadSCells(typeof ex.cells==='string'?JSON.parse(ex.cells):ex.cells);
+    setCalSt(`Connected — ${Object.keys(calBusy).length} busy slots found.`,'ok');
+    // Auto-save to Supabase so dashboard picks it up immediately
+    const gBusy=calProvider==='google'?calBusy:{};
+    const msBusy=calProvider==='microsoft'?calBusy:{};
+    const cells=getSCells();
+    await sbUpsert(cname,cells,gBusy,msBusy,calProvider);
+    db[cname.toLowerCase()]={name:cname,cells,google_busy:gBusy,microsoft_busy:msBusy,cal_provider:calProvider};
+    setSt('sst','Calendar synced — availability saved to dashboard.','ok');
+  }catch(e){
+    setCalSt('Could not fetch calendar: '+e.message,'err');
+    if(e.message.includes('401')||e.message.includes('403')){
+      clearStoredAuth();
+      googleToken='';msToken='';calProvider='';
+      setCalSt('Session expired — please reconnect your calendar.','err');
+    }
+  }
+}
+
 // ── Init ─────────────────────────────────────────────────────
 async function init(){
   populateWeekSel();
 
-  // Pre-load db
   try{
     const rows=await sbGet();
     rows.forEach(row=>{
@@ -675,42 +724,34 @@ async function init(){
     });
   }catch(e){}
 
-  // Handle OAuth redirect
   const wasRedirect=handleOAuthRedirect();
   if(wasRedirect){
     document.getElementById('submit-body').style.display='block';
-    buildSGrid(0);
     updateCalBtns();
-    // Fetch calendar busy slots
-    if(calProvider==='google'&&googleToken){
-      setCalSt('Fetching your Google Calendar…','busy');
-      try{
-        calBusy=await fetchGoogleBusy(0);
-        document.getElementById('cal-info-box').style.display='block';
-        buildSGrid(0); // rebuild with busy slots marked
-        const ex=db[cname.toLowerCase()];
-        if(ex&&ex.cells)loadSCells(typeof ex.cells==='string'?JSON.parse(ex.cells):ex.cells);
-        setCalSt(`Connected — ${Object.keys(calBusy).length} busy slots found this week.`,'ok');
-      }catch(e){
-        setCalSt('Could not fetch calendar: '+e.message,'err');
-      }
+    await fetchAndSaveCal(0);
+  }else{
+    // Restore from localStorage if token still valid
+    const stored=loadStoredAuth();
+    if(stored){
+      cname=stored.name;
+      calProvider=stored.provider;
+      if(stored.provider==='google')googleToken=stored.token;
+      if(stored.provider==='microsoft')msToken=stored.token;
+      document.getElementById('nameIn').value=stored.name;
+      document.getElementById('submit-body').style.display='block';
+      updateCalBtns();
+      await fetchAndSaveCal(0);
+    }else{
+      buildSGrid(0);
     }
-    if(calProvider==='microsoft'&&msToken){
-      setCalSt('Fetching your Microsoft Calendar…','busy');
-      try{
-        calBusy=await fetchMicrosoftBusy(0);
-        document.getElementById('cal-info-box').style.display='block';
-        buildSGrid(0);
-        const ex=db[cname.toLowerCase()];
-        if(ex&&ex.cells)loadSCells(typeof ex.cells==='string'?JSON.parse(ex.cells):ex.cells);
-        setCalSt(`Connected — ${Object.keys(calBusy).length} busy slots found this week.`,'ok');
-      }catch(e){
-        setCalSt('Could not fetch calendar: '+e.message,'err');
-      }
-    }
-  } else {
-    buildSGrid(0);
   }
+
+  // Re-fetch every 15 minutes while page is open to keep data live
+  setInterval(async()=>{
+    if(!calProvider||(!googleToken&&!msToken))return;
+    if(!loadStoredAuth())return;
+    await fetchAndSaveCal(0);
+  },15*60*1000);
 }
 
 init();
