@@ -121,28 +121,27 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
   return busyPeriodsToSlots(data.calendars?.primary?.busy || [], dates);
 }
 
-async function fetchMicrosoftBusy(accessToken, weekOffset) {
+async function fetchMicrosoftBusy(accessToken, weekOffset, email) {
   const dates = getWeekDates(weekOffset);
   const mondayStr = dates[0].toISOString().split('T')[0];
   const fridayStr = dates[4].toISOString().split('T')[0];
   const timeMin = new Date(`${mondayStr}T08:00:00${easternOffsetStr(getEasternOffset(dates[0]))}`);
   const timeMax = new Date(`${fridayStr}T21:00:00${easternOffsetStr(getEasternOffset(dates[4]))}`);
-  // Request in UTC so response times are UTC ISO strings (no naive datetime ambiguity)
   const r = await fetch('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      schedules: ['me'],
+      schedules: [email],
       startTime: { dateTime: timeMin.toISOString().slice(0, 19), timeZone: 'UTC' },
       endTime: { dateTime: timeMax.toISOString().slice(0, 19), timeZone: 'UTC' },
       availabilityViewInterval: 30
     })
   });
-  if (!r.ok) throw new Error('Microsoft getSchedule: ' + r.status);
+  if (!r.ok) throw new Error('Microsoft getSchedule: ' + r.status + ' ' + await r.text());
   const data = await r.json();
   const periods = [];
   (data.value || []).forEach(s => (s.scheduleItems || []).forEach(item => {
-    if (['busy', 'tentative', 'oof'].includes(item.status))
+    if (['busy', 'tentative', 'oof'].includes(item.status) && item.start?.dateTime && item.end?.dateTime)
       periods.push({ start: item.start.dateTime + 'Z', end: item.end.dateTime + 'Z' });
   }));
   return busyPeriodsToSlots(periods, dates);
@@ -151,10 +150,20 @@ async function fetchMicrosoftBusy(accessToken, weekOffset) {
 // Fetch all 4 weeks for a user and save to Supabase
 async function refreshUser(name, provider, accessToken) {
   const busyWeeks = {};
+  let msEmail = null;
+  if (provider === 'microsoft') {
+    const r = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', {
+      headers: { 'Authorization': 'Bearer ' + accessToken }
+    });
+    if (!r.ok) throw new Error('Microsoft /me: ' + r.status);
+    const me = await r.json();
+    msEmail = me.mail || me.userPrincipalName;
+    if (!msEmail) throw new Error('Could not determine Microsoft account email');
+  }
   for (let i = 0; i < 4; i++) {
     busyWeeks[i] = provider === 'google'
       ? await fetchGoogleBusy(accessToken, i)
-      : await fetchMicrosoftBusy(accessToken, i);
+      : await fetchMicrosoftBusy(accessToken, i, msEmail);
   }
   await saveAvailability(name, provider, busyWeeks);
 }
