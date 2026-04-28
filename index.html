@@ -207,6 +207,7 @@ select{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid 
         <button class="btn sm gh" onclick="pillAll(false)">none</button>
         <span class="sc" id="scount"></span>
         <button class="btn sm gh" style="margin-left:auto;" onclick="loadDash(true)">&#8635; Refresh</button>
+        <span id="rfst" class="stline" style="margin-left:8px;"></span>
       </div>
       <div class="pills" id="pillwrap"></div>
       <div class="fbar">
@@ -462,10 +463,28 @@ function setCalSt(msg,cls){const e=document.getElementById('calStatus');e.textCo
 async function loadDash(refreshCals=false){
   if(refreshCals){
     const btn=document.querySelector('#dbody .btn.gh[onclick*="loadDash"]');
+    const rfst=document.getElementById('rfst');
     if(btn){btn.textContent='Refreshing…';btn.disabled=true;}
+    if(rfst){rfst.textContent='';rfst.className='stline';}
     try{
-      await fetch(`${BACKEND_URL}/api/refresh`,{method:'POST'});
-    }catch(e){console.error('Backend refresh failed:',e);}
+      const r=await fetch(`${BACKEND_URL}/api/refresh`,{method:'POST'});
+      if(!r.ok) throw new Error('Server error '+r.status);
+      const data=await r.json();
+      const ok=data.results?.filter(x=>x.ok).length??0;
+      const fail=data.results?.filter(x=>!x.ok)??[];
+      if(rfst){
+        if(fail.length){
+          rfst.textContent=`${ok} updated, ${fail.length} failed: ${fail.map(x=>x.error).join('; ')}`;
+          rfst.className='stline err';
+        } else {
+          rfst.textContent=`${ok} calendar${ok!==1?'s':''} updated`;
+          rfst.className='stline ok';
+        }
+      }
+    }catch(e){
+      console.error('Backend refresh failed:',e);
+      if(rfst){rfst.textContent='Refresh failed: '+e.message;rfst.className='stline err';}
+    }
     if(btn){btn.innerHTML='&#8635; Refresh';btn.disabled=false;}
   }
   try{
