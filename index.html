@@ -253,7 +253,7 @@ const BACKEND_URL = 'https://team-availability-production.up.railway.app';
 // ── Time constants ───────────────────────────────────────────
 const DAYS = ['Mon','Tue','Wed','Thu','Fri'];
 const SLOTS = [];
-for(let h=8;h<18;h++){SLOTS.push({h,m:0});SLOTS.push({h,m:30});}
+for(let h=8;h<21;h++){SLOTS.push({h,m:0});SLOTS.push({h,m:30});}
 function fmt(h,m){const ap=h<12?'am':'pm';const hh=h>12?h-12:(h===0?12:h);return`${hh}:${m===0?'00':'30'}${ap}`;}
 
 let tzOffset=0; // 0=ET (default), -3=PT

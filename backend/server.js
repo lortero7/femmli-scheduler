@@ -60,7 +60,7 @@ async function saveAvailability(name, provider, busyWeeks) {
 
 // ── Calendar helpers ─────────────────────────────────────────
 const SLOTS = [];
-for (let h = 8; h < 18; h++) { SLOTS.push({ h, m: 0 }); SLOTS.push({ h, m: 30 }); }
+for (let h = 8; h < 21; h++) { SLOTS.push({ h, m: 0 }); SLOTS.push({ h, m: 30 }); }
 
 // Railway runs UTC — use Intl to get real Eastern offset (-4 EDT / -5 EST)
 function getEasternOffset(date) {
@@ -110,7 +110,7 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
   const mondayStr = dates[0].toISOString().split('T')[0];
   const fridayStr = dates[4].toISOString().split('T')[0];
   const timeMin = new Date(`${mondayStr}T08:00:00${easternOffsetStr(getEasternOffset(dates[0]))}`);
-  const timeMax = new Date(`${fridayStr}T18:00:00${easternOffsetStr(getEasternOffset(dates[4]))}`);
+  const timeMax = new Date(`${fridayStr}T21:00:00${easternOffsetStr(getEasternOffset(dates[4]))}`);
   const r = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
@@ -126,7 +126,7 @@ async function fetchMicrosoftBusy(accessToken, weekOffset) {
   const mondayStr = dates[0].toISOString().split('T')[0];
   const fridayStr = dates[4].toISOString().split('T')[0];
   const timeMin = new Date(`${mondayStr}T08:00:00${easternOffsetStr(getEasternOffset(dates[0]))}`);
-  const timeMax = new Date(`${fridayStr}T18:00:00${easternOffsetStr(getEasternOffset(dates[4]))}`);
+  const timeMax = new Date(`${fridayStr}T21:00:00${easternOffsetStr(getEasternOffset(dates[4]))}`);
   // Request in UTC so response times are UTC ISO strings (no naive datetime ambiguity)
   const r = await fetch('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
     method: 'POST',
