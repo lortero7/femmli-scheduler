@@ -62,23 +62,23 @@ async function saveAvailability(name, provider, busyWeeks) {
 const SLOTS = [];
 for (let h = 8; h < 18; h++) { SLOTS.push({ h, m: 0 }); SLOTS.push({ h, m: 30 }); }
 
-// Railway runs UTC — use Intl to get real Pacific offset (-7 PDT / -8 PST)
-function getPacificOffset(date) {
+// Railway runs UTC — use Intl to get real Eastern offset (-4 EDT / -5 EST)
+function getEasternOffset(date) {
   const noonUTC = new Date(date);
   noonUTC.setUTCHours(12, 0, 0, 0);
   const h = parseInt(new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Los_Angeles', hour: 'numeric', hour12: false
+    timeZone: 'America/New_York', hour: 'numeric', hour12: false
   }).format(noonUTC));
-  return h - 12; // -7 for PDT, -8 for PST
+  return h - 12; // -4 for EDT, -5 for EST
 }
 
-function pacificOffsetStr(offset) {
-  return offset === -7 ? '-07:00' : '-08:00';
+function easternOffsetStr(offset) {
+  return offset === -4 ? '-04:00' : '-05:00';
 }
 
 function getWeekDates(offset = 0) {
-  // Get today's date in Pacific time (avoids server UTC being a different calendar day)
-  const pacificDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  // Get today's date in Eastern time (avoids server UTC being a different calendar day)
+  const pacificDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const [y, m, d] = pacificDateStr.split('-').map(Number);
   const today = new Date(Date.UTC(y, m - 1, d));
   const dow = today.getUTCDay();
@@ -94,7 +94,7 @@ function busyPeriodsToSlots(periods, dates) {
     const end = new Date(p.end);
     dates.forEach((date, di) => {
       const dateStr = date.toISOString().split('T')[0];
-      const offStr = pacificOffsetStr(getPacificOffset(date));
+      const offStr = easternOffsetStr(getEasternOffset(date));
       SLOTS.forEach((slot, si) => {
         const slotStart = new Date(`${dateStr}T${String(slot.h).padStart(2,'0')}:${String(slot.m).padStart(2,'0')}:00${offStr}`);
         const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000);
@@ -109,8 +109,8 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
   const dates = getWeekDates(weekOffset);
   const mondayStr = dates[0].toISOString().split('T')[0];
   const fridayStr = dates[4].toISOString().split('T')[0];
-  const timeMin = new Date(`${mondayStr}T08:00:00${pacificOffsetStr(getPacificOffset(dates[0]))}`);
-  const timeMax = new Date(`${fridayStr}T18:00:00${pacificOffsetStr(getPacificOffset(dates[4]))}`);
+  const timeMin = new Date(`${mondayStr}T08:00:00${easternOffsetStr(getPacificOffset(dates[0]))}`);
+  const timeMax = new Date(`${fridayStr}T18:00:00${easternOffsetStr(getPacificOffset(dates[4]))}`);
   const r = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
@@ -125,8 +125,8 @@ async function fetchMicrosoftBusy(accessToken, weekOffset) {
   const dates = getWeekDates(weekOffset);
   const mondayStr = dates[0].toISOString().split('T')[0];
   const fridayStr = dates[4].toISOString().split('T')[0];
-  const timeMin = new Date(`${mondayStr}T08:00:00${pacificOffsetStr(getPacificOffset(dates[0]))}`);
-  const timeMax = new Date(`${fridayStr}T18:00:00${pacificOffsetStr(getPacificOffset(dates[4]))}`);
+  const timeMin = new Date(`${mondayStr}T08:00:00${easternOffsetStr(getPacificOffset(dates[0]))}`);
+  const timeMax = new Date(`${fridayStr}T18:00:00${easternOffsetStr(getPacificOffset(dates[4]))}`);
   // Request in UTC so response times are UTC ISO strings (no naive datetime ambiguity)
   const r = await fetch('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
     method: 'POST',
