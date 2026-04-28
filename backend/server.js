@@ -116,7 +116,7 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
     headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
     body: JSON.stringify({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), items: [{ id: 'primary' }] })
   });
-  if (!r.ok) throw new Error('Google freeBusy: ' + r.status);
+  if (!r.ok) throw new Error('Google freeBusy: ' + r.status + ' ' + await r.text());
   const data = await r.json();
   return busyPeriodsToSlots(data.calendars?.primary?.busy || [], dates);
 }
