@@ -184,7 +184,7 @@ async function getNewMicrosoftToken(refreshToken) {
   const r = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: MS_CLIENT_ID, client_secret: MS_CLIENT_SECRET, refresh_token: refreshToken, grant_type: 'refresh_token', scope: 'https://graph.microsoft.com/Calendars.Read offline_access' })
+    body: new URLSearchParams({ client_id: MS_CLIENT_ID, client_secret: MS_CLIENT_SECRET, refresh_token: refreshToken, grant_type: 'refresh_token', scope: 'https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/User.Read offline_access' })
   });
   const data = await r.json();
   if (!data.access_token) throw new Error(data.error_description || 'Microsoft token refresh failed');
@@ -235,7 +235,7 @@ app.get('/auth/microsoft', (req, res) => {
     client_id: MS_CLIENT_ID,
     redirect_uri: MS_REDIRECT,
     response_type: 'code',
-    scope: 'https://graph.microsoft.com/Calendars.Read offline_access',
+    scope: 'https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/User.Read offline_access',
     state: name
   });
   res.redirect(`https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`);
@@ -248,7 +248,7 @@ app.get('/auth/microsoft/callback', async (req, res) => {
     const tokenRes = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ code, client_id: MS_CLIENT_ID, client_secret: MS_CLIENT_SECRET, redirect_uri: MS_REDIRECT, grant_type: 'authorization_code', scope: 'https://graph.microsoft.com/Calendars.Read offline_access' })
+      body: new URLSearchParams({ code, client_id: MS_CLIENT_ID, client_secret: MS_CLIENT_SECRET, redirect_uri: MS_REDIRECT, grant_type: 'authorization_code', scope: 'https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/User.Read offline_access' })
     });
     const tokens = await tokenRes.json();
     if (!tokens.refresh_token) throw new Error('No refresh token returned');
