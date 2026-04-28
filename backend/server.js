@@ -10,7 +10,7 @@ const {
   MS_CLIENT_ID, MS_CLIENT_SECRET,
   SUPABASE_URL, SUPABASE_SERVICE_KEY,
   BACKEND_URL,
-  FRONTEND_URL = 'https://lortero7.github.io/femmli-scheduler',
+  FRONTEND_URL = 'https://lortero7.github.io/team-availability',
   PORT = 3000
 } = process.env;
 
@@ -31,11 +31,12 @@ async function sbFetch(path, opts = {}) {
 }
 
 async function saveToken(name, provider, refreshToken) {
-  await fetch(`${SUPABASE_URL}/rest/v1/tokens?on_conflict=name`, {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/tokens?on_conflict=name`, {
     method: 'POST',
     headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
     body: JSON.stringify({ name, provider, refresh_token: refreshToken, updated_at: new Date().toISOString() })
   });
+  if (!r.ok) console.error('saveToken failed:', await r.text());
 }
 
 async function getAllTokens() {
@@ -44,7 +45,7 @@ async function getAllTokens() {
 
 async function saveAvailability(name, provider, busyWeeks) {
   const col = provider === 'google' ? 'google_busy' : 'microsoft_busy';
-  await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=name`, {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=name`, {
     method: 'POST',
     headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
     body: JSON.stringify({
@@ -54,19 +55,36 @@ async function saveAvailability(name, provider, busyWeeks) {
       updated_at: new Date().toISOString()
     })
   });
+  if (!r.ok) console.error('saveAvailability failed:', await r.text());
 }
 
 // ── Calendar helpers ─────────────────────────────────────────
 const SLOTS = [];
 for (let h = 8; h < 18; h++) { SLOTS.push({ h, m: 0 }); SLOTS.push({ h, m: 30 }); }
 
+// Railway runs UTC — use Intl to get real Pacific offset (-7 PDT / -8 PST)
+function getPacificOffset(date) {
+  const noonUTC = new Date(date);
+  noonUTC.setUTCHours(12, 0, 0, 0);
+  const h = parseInt(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles', hour: 'numeric', hour12: false
+  }).format(noonUTC));
+  return h - 12; // -7 for PDT, -8 for PST
+}
+
+function pacificOffsetStr(offset) {
+  return offset === -7 ? '-07:00' : '-08:00';
+}
+
 function getWeekDates(offset = 0) {
-  const now = new Date();
-  const day = now.getDay();
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1) + (offset * 7));
-  monday.setHours(0, 0, 0, 0);
-  return [0, 1, 2, 3, 4].map(i => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
+  // Get today's date in Pacific time (avoids server UTC being a different calendar day)
+  const pacificDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  const [y, m, d] = pacificDateStr.split('-').map(Number);
+  const today = new Date(Date.UTC(y, m - 1, d));
+  const dow = today.getUTCDay();
+  const monday = new Date(today);
+  monday.setUTCDate(today.getUTCDate() - (dow === 0 ? 6 : dow - 1) + offset * 7);
+  return [0, 1, 2, 3, 4].map(i => { const day = new Date(monday); day.setUTCDate(monday.getUTCDate() + i); return day; });
 }
 
 function busyPeriodsToSlots(periods, dates) {
@@ -75,9 +93,11 @@ function busyPeriodsToSlots(periods, dates) {
     const start = new Date(p.start);
     const end = new Date(p.end);
     dates.forEach((date, di) => {
+      const dateStr = date.toISOString().split('T')[0];
+      const offStr = pacificOffsetStr(getPacificOffset(date));
       SLOTS.forEach((slot, si) => {
-        const slotStart = new Date(date); slotStart.setHours(slot.h, slot.m, 0, 0);
-        const slotEnd = new Date(slotStart); slotEnd.setMinutes(slotEnd.getMinutes() + 30);
+        const slotStart = new Date(`${dateStr}T${String(slot.h).padStart(2,'0')}:${String(slot.m).padStart(2,'0')}:00${offStr}`);
+        const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000);
         if (slotStart < end && slotEnd > start) busy[`${si}_${di}`] = true;
       });
     });
@@ -87,12 +107,14 @@ function busyPeriodsToSlots(periods, dates) {
 
 async function fetchGoogleBusy(accessToken, weekOffset) {
   const dates = getWeekDates(weekOffset);
-  const timeMin = new Date(dates[0]); timeMin.setHours(8, 0, 0, 0);
-  const timeMax = new Date(dates[4]); timeMax.setHours(18, 0, 0, 0);
+  const mondayStr = dates[0].toISOString().split('T')[0];
+  const fridayStr = dates[4].toISOString().split('T')[0];
+  const timeMin = new Date(`${mondayStr}T08:00:00${pacificOffsetStr(getPacificOffset(dates[0]))}`);
+  const timeMax = new Date(`${fridayStr}T18:00:00${pacificOffsetStr(getPacificOffset(dates[4]))}`);
   const r = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), timeZone: 'America/Los_Angeles', items: [{ id: 'primary' }] })
+    body: JSON.stringify({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), items: [{ id: 'primary' }] })
   });
   if (!r.ok) throw new Error('Google freeBusy: ' + r.status);
   const data = await r.json();
@@ -101,15 +123,18 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
 
 async function fetchMicrosoftBusy(accessToken, weekOffset) {
   const dates = getWeekDates(weekOffset);
-  const timeMin = new Date(dates[0]); timeMin.setHours(8, 0, 0, 0);
-  const timeMax = new Date(dates[4]); timeMax.setHours(18, 0, 0, 0);
+  const mondayStr = dates[0].toISOString().split('T')[0];
+  const fridayStr = dates[4].toISOString().split('T')[0];
+  const timeMin = new Date(`${mondayStr}T08:00:00${pacificOffsetStr(getPacificOffset(dates[0]))}`);
+  const timeMax = new Date(`${fridayStr}T18:00:00${pacificOffsetStr(getPacificOffset(dates[4]))}`);
+  // Request in UTC so response times are UTC ISO strings (no naive datetime ambiguity)
   const r = await fetch('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       schedules: ['me'],
-      startTime: { dateTime: timeMin.toISOString(), timeZone: 'Pacific Standard Time' },
-      endTime: { dateTime: timeMax.toISOString(), timeZone: 'Pacific Standard Time' },
+      startTime: { dateTime: timeMin.toISOString().slice(0, 19), timeZone: 'UTC' },
+      endTime: { dateTime: timeMax.toISOString().slice(0, 19), timeZone: 'UTC' },
       availabilityViewInterval: 30
     })
   });
@@ -118,7 +143,7 @@ async function fetchMicrosoftBusy(accessToken, weekOffset) {
   const periods = [];
   (data.value || []).forEach(s => (s.scheduleItems || []).forEach(item => {
     if (['busy', 'tentative', 'oof'].includes(item.status))
-      periods.push({ start: item.start.dateTime, end: item.end.dateTime });
+      periods.push({ start: item.start.dateTime + 'Z', end: item.end.dateTime + 'Z' });
   }));
   return busyPeriodsToSlots(periods, dates);
 }

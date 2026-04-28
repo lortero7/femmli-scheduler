@@ -339,14 +339,14 @@ function handleConnectReturn(){
     document.getElementById('submit-body').style.display='block';
     buildSGrid(0);
     setCalSt('Connection failed: '+decodeURIComponent(authError),'err');
-    return true;
+    return 'error';
   }
   if(connected&&name){
     cname=name;calProvider=connected;
     document.getElementById('nameIn').value=name;
     localStorage.setItem('femmli_name',name);
     localStorage.setItem('femmli_provider',connected);
-    return true;
+    return 'connected';
   }
   return false;
 }
@@ -563,7 +563,7 @@ async function init(){
   try{const rows=await sbGet();db=parseDb(rows);}catch(e){}
 
   const wasReturn=handleConnectReturn();
-  if(wasReturn&&cname){
+  if(wasReturn==='connected'&&cname){
     // Reload db so we have fresh data after backend saved it
     try{const rows=await sbGet();db=parseDb(rows);}catch(e){}
     const ex=db[cname.toLowerCase()];
