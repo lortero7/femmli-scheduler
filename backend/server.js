@@ -31,7 +31,7 @@ async function sbFetch(path, opts = {}) {
 }
 
 async function saveToken(name, provider, refreshToken) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/tokens?on_conflict=name`, {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/tokens?on_conflict=name,provider`, {
     method: 'POST',
     headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
     body: JSON.stringify({ name, provider, refresh_token: refreshToken, updated_at: new Date().toISOString() })
