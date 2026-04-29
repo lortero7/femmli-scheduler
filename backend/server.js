@@ -129,8 +129,58 @@ function parseIcsDate(prop, val) {
   const rawTzid = (prop.match(/TZID=([^;:]+)/i) || [])[1];
   const tzid = rawTzid ? (WIN_TZ[rawTzid] || rawTzid) : null;
   const ref = new Date(Date.UTC(+yr, +mo - 1, +dy, +hr, +min, +sec));
-  if (tzid) { try { return new Date(ref.getTime() + tzOffsetMinutes(ref, tzid) * 60000); } catch (e) {} }
+  const tz = tzid || 'America/New_York'; // floating times: assume Eastern
+  try { return new Date(ref.getTime() + tzOffsetMinutes(ref, tz) * 60000); } catch (e) {}
   return ref;
+}
+
+// Expand RRULE for WEEKLY and DAILY recurrences over a 6-week window
+function expandRRule(rrule, dtstart, dtend) {
+  const freq = ((rrule.match(/FREQ=([^;]+)/i)||[])[1]||'').toUpperCase();
+  if (freq !== 'WEEKLY' && freq !== 'DAILY') return null;
+
+  const interval = parseInt((rrule.match(/INTERVAL=(\d+)/i)||[])[1]||'1');
+  const bydayRaw = (rrule.match(/BYDAY=([^;]+)/i)||[])[1];
+  const untilRaw = (rrule.match(/UNTIL=(\d{8})/i)||[])[1];
+  const countRaw = (rrule.match(/COUNT=(\d+)/i)||[])[1];
+
+  const DAY = {SU:0,MO:1,TU:2,WE:3,TH:4,FR:5,SA:6};
+  const byday = bydayRaw
+    ? bydayRaw.split(',').map(s=>{const m=s.match(/[A-Z]{2}$/);return m?DAY[m[0]]:-1;}).filter(d=>d>=0)
+    : [];
+
+  const win6w = new Date(Date.now() + 6 * 7 * 86400000);
+  const until = untilRaw
+    ? new Date(`${untilRaw.slice(0,4)}-${untilRaw.slice(4,6)}-${untilRaw.slice(6,8)}T23:59:59Z`)
+    : win6w;
+  const cutoff = until < win6w ? until : win6w;
+  const maxCount = countRaw ? parseInt(countRaw) : Infinity;
+  const duration = dtend.getTime() - dtstart.getTime();
+  const periods = [];
+  let n = 0;
+
+  if (freq === 'DAILY') {
+    for (let t = new Date(dtstart); t <= cutoff && n < maxCount; t = new Date(t.getTime() + interval * 86400000), n++)
+      periods.push({ start: t.toISOString(), end: new Date(t.getTime() + duration).toISOString() });
+  } else {
+    const startDow = dtstart.getUTCDay();
+    const mondayOfStart = new Date(dtstart.getTime() - (startDow === 0 ? 6 : startDow - 1) * 86400000);
+    mondayOfStart.setUTCHours(0, 0, 0, 0);
+    const targetDays = byday.length ? byday : [startDow];
+
+    for (let wk = new Date(mondayOfStart); wk <= cutoff && n < maxCount; wk = new Date(wk.getTime() + interval * 7 * 86400000)) {
+      for (const dow of [...targetDays].sort((a,b)=>a-b)) {
+        const dFromMon = dow === 0 ? 6 : dow - 1;
+        const dayDate = new Date(wk.getTime() + dFromMon * 86400000);
+        const occ = new Date(Date.UTC(dayDate.getUTCFullYear(), dayDate.getUTCMonth(), dayDate.getUTCDate(),
+          dtstart.getUTCHours(), dtstart.getUTCMinutes(), dtstart.getUTCSeconds()));
+        if (occ < dtstart || occ > cutoff) continue;
+        periods.push({ start: occ.toISOString(), end: new Date(occ.getTime() + duration).toISOString() });
+        if (++n >= maxCount) break;
+      }
+    }
+  }
+  return periods.length > 1 ? periods : null;
 }
 
 function parseDuration(s) {
@@ -141,12 +191,16 @@ function parseDuration(s) {
 function parseIcs(text) {
   const lines = text.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '').split(/\r?\n/);
   const periods = [];
-  let inEvent = false, inFreebusy = false, dtstart = null, dtend = null;
+  let inEvent = false, inFreebusy = false, dtstart = null, dtend = null, rrule = null;
   for (const raw of lines) {
     const line = raw.trim();
-    if (line === 'BEGIN:VEVENT') { inEvent = true; dtstart = dtend = null; continue; }
+    if (line === 'BEGIN:VEVENT') { inEvent = true; dtstart = dtend = rrule = null; continue; }
     if (line === 'END:VEVENT') {
-      if (dtstart && dtend) periods.push({ start: dtstart.toISOString(), end: dtend.toISOString() });
+      if (dtstart && dtend) {
+        const recur = rrule ? expandRRule(rrule, dtstart, dtend) : null;
+        if (recur) periods.push(...recur);
+        else periods.push({ start: dtstart.toISOString(), end: dtend.toISOString() });
+      }
       inEvent = false; continue;
     }
     if (line === 'BEGIN:VFREEBUSY') { inFreebusy = true; continue; }
@@ -159,6 +213,7 @@ function parseIcs(text) {
     if (inEvent) {
       if (key === 'DTSTART') dtstart = parseIcsDate(prop, val);
       else if (key === 'DTEND') dtend = parseIcsDate(prop, val);
+      else if (key === 'RRULE') rrule = val;
       else if (key === 'DURATION' && dtstart) {
         const ms = parseDuration(val);
         if (ms) dtend = new Date(dtstart.getTime() + ms);
