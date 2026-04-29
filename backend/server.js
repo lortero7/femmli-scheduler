@@ -493,25 +493,25 @@ app.get('/auth/microsoft/callback', async (req, res) => {
 app.post('/api/refresh', async (req, res) => {
   try {
     const tokenRows = await getAllTokens();
-    const results = await Promise.all(tokenRows.map(async row => {
+    const results = [];
+    for (const row of tokenRows) {
       try {
         let tokenSource;
         if (row.provider === 'ics') {
           tokenSource = row.refresh_token;
         } else {
-          // Try to parse as [{email, refresh_token}] array; fall back to plain token for legacy rows
           try {
             const arr = JSON.parse(row.refresh_token);
             tokenSource = Array.isArray(arr) ? arr : [{ email: null, refresh_token: row.refresh_token }];
           } catch { tokenSource = [{ email: null, refresh_token: row.refresh_token }]; }
         }
         await refreshUser(row.name, row.provider, tokenSource);
-        return { name: row.name, ok: true };
+        results.push({ name: row.name, ok: true });
       } catch (e) {
         console.error(`Refresh failed for ${row.name}:`, e.message);
-        return { name: row.name, ok: false, error: e.message };
+        results.push({ name: row.name, ok: false, error: e.message });
       }
-    }));
+    }
     res.json({ results });
   } catch (e) {
     res.status(500).json({ error: e.message });
