@@ -169,6 +169,14 @@ select{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid 
           </button>
         </div>
         <div id="calStatus" class="cal-status"></div>
+        <div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--bdr);">
+          <p style="font-size:12px;color:var(--txM);margin-bottom:.5rem;">Or connect via a published ICS/webcal URL (e.g. Outlook → Publish calendar → "shows when busy"):</p>
+          <div class="row" style="gap:6px;">
+            <input type="url" id="icsUrlIn" placeholder="https://outlook.office365.com/owa/calendar/…/calendar.ics" style="flex:1;font-size:12px;"/>
+            <button class="btn pri" style="white-space:nowrap;" onclick="connectIcs()">Connect ICS</button>
+          </div>
+          <div id="icsStatus" class="cal-status"></div>
+        </div>
       </div>
 
       <div class="divider">or set manually</div>
@@ -332,8 +340,9 @@ function parseDb(rows){
     out[row.name.toLowerCase()]={
       name:row.name,
       cells:parse(row.cells),
-      google_busy:parse(row.google_busy),   // {"0":{si_di:true},"1":{...},...}
+      google_busy:parse(row.google_busy),
       microsoft_busy:parse(row.microsoft_busy),
+      ics_busy:parse(row.ics_busy),
       cal_provider:row.cal_provider||''
     };
   });
@@ -352,6 +361,29 @@ function connectMicrosoft(){
   setCalSt('Redirecting to Microsoft…','busy');
   localStorage.setItem('femmli_name',cname);
   window.location.href=`${BACKEND_URL}/auth/microsoft?name=${encodeURIComponent(cname)}`;
+}
+
+async function connectIcs(){
+  const url=document.getElementById('icsUrlIn').value.trim();
+  if(!url){return;}
+  if(!cname){setSt('sst','Enter your name first.','err');return;}
+  const st=document.getElementById('icsStatus');
+  st.textContent='Connecting…';st.className='cal-status busy';
+  try{
+    const r=await fetch(`${BACKEND_URL}/api/connect-ics`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:cname,icsUrl:url})});
+    if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Server error '+r.status);}
+    const rows=await sbGet();db=parseDb(rows);
+    const ex=db[cname.toLowerCase()];
+    if(ex){
+      const gb=(ex.google_busy&&ex.google_busy['0'])||{};
+      const mb=(ex.microsoft_busy&&ex.microsoft_busy['0'])||{};
+      const ib=(ex.ics_busy&&ex.ics_busy['0'])||{};
+      calBusy={...gb,...mb,...ib};
+      buildSGrid(0);
+      if(ex.cells)loadSCells(ex.cells);
+    }
+    st.textContent='ICS calendar connected ✓';st.className='cal-status ok';
+  }catch(e){st.textContent='Connection failed: '+e.message;st.className='cal-status err';}
 }
 
 // Handle return from backend after OAuth (?connected=google&name=X or ?auth_error=...)
@@ -391,7 +423,8 @@ function initSubmit(){
   if(ex){
     const gb=(ex.google_busy&&ex.google_busy['0'])||{};
     const mb=(ex.microsoft_busy&&ex.microsoft_busy['0'])||{};
-    calBusy={...gb,...mb};
+    const ib=(ex.ics_busy&&ex.ics_busy['0'])||{};
+    calBusy={...gb,...mb,...ib};
   }
   buildSGrid(0);
   if(ex&&ex.cells)loadSCells(ex.cells);
@@ -503,15 +536,14 @@ function getMergedBusy(person,weekOffset){
   const wo=String(weekOffset||0);
   const gb=(person.google_busy&&person.google_busy[wo])||{};
   const mb=(person.microsoft_busy&&person.microsoft_busy[wo])||{};
-  const merged={};
-  Object.keys({...gb,...mb}).forEach(k=>merged[k]=true);
-  return merged;
+  const ib=(person.ics_busy&&person.ics_busy[wo])||{};
+  return {...gb,...mb,...ib};
 }
 
 function isAvailable(person,key,weekOffset){
   const busy=getMergedBusy(person,weekOffset);
   if(busy[key])return false;
-  if(person.cal_provider)return true;
+  if(person.cal_provider||person.ics_busy)return true;
   return !!(person.cells&&person.cells[key]);
 }
 
@@ -537,9 +569,10 @@ function buildPills(ppl){
     const pill=document.createElement('div');
     pill.className='pill'+(sel.has(p.name)?' on':'');
     const dot=document.createElement('span');dot.className='cal-dot';
-    const hasG=!!p.google_busy,hasM=!!p.microsoft_busy;
-    dot.style.background=hasG&&hasM?'#7c5cbf':hasG?'#4285F4':hasM?'#00a4ef':'#b2b0a8';
-    dot.title=hasG&&hasM?'Google + Microsoft':hasG?'Google':hasM?'Microsoft':'manual';
+    const hasG=!!p.google_busy,hasM=!!p.microsoft_busy,hasI=!!p.ics_busy;
+    const calCount=[hasG,hasM,hasI].filter(Boolean).length;
+    dot.style.background=calCount>1?'#7c5cbf':hasG?'#4285F4':hasM?'#00a4ef':hasI?'#e07b2a':'#b2b0a8';
+    dot.title=[hasG&&'Google',hasM&&'Microsoft',hasI&&'ICS'].filter(Boolean).join(' + ')||'manual';
     const sp=document.createElement('span');sp.textContent=p.name;
     const rm=document.createElement('span');rm.className='rm';rm.textContent='×';
     pill.append(dot,sp,rm);
@@ -620,7 +653,8 @@ async function init(){
     if(ex){
       const gb=(ex.google_busy&&ex.google_busy['0'])||{};
       const mb=(ex.microsoft_busy&&ex.microsoft_busy['0'])||{};
-      calBusy={...gb,...mb};
+      const ib=(ex.ics_busy&&ex.ics_busy['0'])||{};
+      calBusy={...gb,...mb,...ib};
     }
     document.getElementById('submit-body').style.display='block';
     document.getElementById('cal-info-box').style.display='block';

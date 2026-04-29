@@ -44,7 +44,7 @@ async function getAllTokens() {
 }
 
 async function saveAvailability(name, provider, busyWeeks) {
-  const col = provider === 'google' ? 'google_busy' : 'microsoft_busy';
+  const col = provider === 'google' ? 'google_busy' : provider === 'microsoft' ? 'microsoft_busy' : 'ics_busy';
   const r = await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=name`, {
     method: 'POST',
     headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
@@ -56,6 +56,67 @@ async function saveAvailability(name, provider, busyWeeks) {
     })
   });
   if (!r.ok) console.error('saveAvailability failed:', await r.text());
+}
+
+// ── ICS parser ───────────────────────────────────────────────
+function tzOffsetMinutes(date, tzid) {
+  const utcMs = date.getTime();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tzid, year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false
+  }).formatToParts(date).reduce((a, p) => { a[p.type] = p.value; return a; }, {});
+  const localMs = Date.UTC(+parts.year, +parts.month - 1, +parts.day,
+    parts.hour === '24' ? 0 : +parts.hour, +parts.minute, +parts.second);
+  return Math.round((utcMs - localMs) / 60000);
+}
+
+function parseIcsDate(prop, val) {
+  if (/VALUE=DATE/i.test(prop)) {
+    const m = val.match(/(\d{4})(\d{2})(\d{2})/);
+    return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
+  }
+  const m = val.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/);
+  if (!m) return null;
+  const [, yr, mo, dy, hr, min, sec, z] = m;
+  if (z === 'Z') return new Date(Date.UTC(+yr, +mo - 1, +dy, +hr, +min, +sec));
+  const tzid = (prop.match(/TZID=([^;:]+)/i) || [])[1];
+  const ref = new Date(Date.UTC(+yr, +mo - 1, +dy, +hr, +min, +sec));
+  if (tzid) { try { return new Date(ref.getTime() + tzOffsetMinutes(ref, tzid) * 60000); } catch (e) {} }
+  return ref;
+}
+
+function parseIcs(text) {
+  const lines = text.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '').split(/\r?\n/);
+  const periods = [];
+  let inEvent = false, dtstart = null, dtend = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line === 'BEGIN:VEVENT') { inEvent = true; dtstart = dtend = null; continue; }
+    if (line === 'END:VEVENT') {
+      if (dtstart && dtend) periods.push({ start: dtstart.toISOString(), end: dtend.toISOString() });
+      inEvent = false; continue;
+    }
+    if (!inEvent) continue;
+    const ci = line.indexOf(':');
+    if (ci < 0) continue;
+    const prop = line.substring(0, ci), val = line.substring(ci + 1);
+    const key = prop.split(';')[0].toUpperCase();
+    if (key === 'DTSTART') dtstart = parseIcsDate(prop, val);
+    else if (key === 'DTEND') dtend = parseIcsDate(prop, val);
+    else if (key === 'DURATION' && dtstart) {
+      const dm = val.match(/P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?/);
+      if (dm) dtend = new Date(dtstart.getTime() +
+        ((+(dm[1]||0))*86400 + (+(dm[2]||0))*3600 + (+(dm[3]||0))*60 + (+(dm[4]||0))) * 1000);
+    }
+  }
+  return periods;
+}
+
+async function fetchIcsBusy(icsUrl, weekOffset) {
+  const r = await fetch(icsUrl);
+  if (!r.ok) throw new Error('ICS fetch: ' + r.status);
+  const periods = parseIcs(await r.text());
+  return busyPeriodsToSlots(periods, getWeekDates(weekOffset));
 }
 
 // ── Calendar helpers ─────────────────────────────────────────
@@ -150,20 +211,24 @@ async function fetchMicrosoftBusy(accessToken, weekOffset, email) {
 // Fetch all 4 weeks for a user and save to Supabase
 async function refreshUser(name, provider, accessToken) {
   const busyWeeks = {};
-  let msEmail = null;
-  if (provider === 'microsoft') {
-    const r = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', {
-      headers: { 'Authorization': 'Bearer ' + accessToken }
-    });
-    if (!r.ok) throw new Error('Microsoft /me: ' + r.status);
-    const me = await r.json();
-    msEmail = me.mail || me.userPrincipalName;
-    if (!msEmail) throw new Error('Could not determine Microsoft account email');
-  }
-  for (let i = 0; i < 4; i++) {
-    busyWeeks[i] = provider === 'google'
-      ? await fetchGoogleBusy(accessToken, i)
-      : await fetchMicrosoftBusy(accessToken, i, msEmail);
+  if (provider === 'ics') {
+    for (let i = 0; i < 4; i++) busyWeeks[i] = await fetchIcsBusy(accessToken, i);
+  } else {
+    let msEmail = null;
+    if (provider === 'microsoft') {
+      const r = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', {
+        headers: { 'Authorization': 'Bearer ' + accessToken }
+      });
+      if (!r.ok) throw new Error('Microsoft /me: ' + r.status);
+      const me = await r.json();
+      msEmail = me.mail || me.userPrincipalName;
+      if (!msEmail) throw new Error('Could not determine Microsoft account email');
+    }
+    for (let i = 0; i < 4; i++) {
+      busyWeeks[i] = provider === 'google'
+        ? await fetchGoogleBusy(accessToken, i)
+        : await fetchMicrosoftBusy(accessToken, i, msEmail);
+    }
   }
   await saveAvailability(name, provider, busyWeeks);
 }
@@ -269,7 +334,9 @@ app.post('/api/refresh', async (req, res) => {
       try {
         const accessToken = row.provider === 'google'
           ? await getNewGoogleToken(row.refresh_token)
-          : await getNewMicrosoftToken(row.refresh_token);
+          : row.provider === 'microsoft'
+          ? await getNewMicrosoftToken(row.refresh_token)
+          : row.refresh_token; // ICS: stored value is the URL itself
         await refreshUser(row.name, row.provider, accessToken);
         return { name: row.name, ok: true };
       } catch (e) {
@@ -279,6 +346,21 @@ app.post('/api/refresh', async (req, res) => {
     }));
     res.json({ results });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/connect-ics', async (req, res) => {
+  const { name, icsUrl } = req.body;
+  if (!name || !icsUrl) return res.status(400).json({ error: 'Missing name or icsUrl' });
+  try {
+    const busyWeeks = {};
+    for (let i = 0; i < 4; i++) busyWeeks[i] = await fetchIcsBusy(icsUrl, i);
+    await saveToken(name, 'ics', icsUrl);
+    await saveAvailability(name, 'ics', busyWeeks);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('ICS connect error:', e);
     res.status(500).json({ error: e.message });
   }
 });
