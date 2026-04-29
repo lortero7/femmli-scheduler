@@ -43,6 +43,33 @@ async function getAllTokens() {
   return sbFetch('tokens?select=name,provider,refresh_token');
 }
 
+// Returns [{email, refresh_token}] for a user+provider, or [] if none stored
+async function getTokensForUser(name, provider) {
+  try {
+    const rows = await sbFetch(`tokens?name=eq.${encodeURIComponent(name)}&provider=eq.${provider}&select=refresh_token`);
+    if (!rows.length) return [];
+    try {
+      const arr = JSON.parse(rows[0].refresh_token);
+      return Array.isArray(arr) ? arr : [{ email: null, refresh_token: rows[0].refresh_token }];
+    } catch { return [{ email: null, refresh_token: rows[0].refresh_token }]; }
+  } catch { return []; }
+}
+
+// Stores connected account emails/count in availability.cal_accounts for frontend display
+async function updateCalAccounts(name, provider, value) {
+  let accounts = {};
+  try {
+    const rows = await sbFetch(`availability?name=eq.${encodeURIComponent(name)}&select=cal_accounts`);
+    if (rows.length && rows[0].cal_accounts) accounts = JSON.parse(rows[0].cal_accounts);
+  } catch {}
+  accounts[provider] = value;
+  await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=name`, {
+    method: 'POST',
+    headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
+    body: JSON.stringify({ name, cal_accounts: JSON.stringify(accounts), updated_at: new Date().toISOString() })
+  }).catch(e => console.error('updateCalAccounts failed:', e.message));
+}
+
 async function saveAvailability(name, provider, busyWeeks) {
   const col = provider === 'google' ? 'google_busy' : provider === 'microsoft' ? 'microsoft_busy' : 'ics_busy';
   const r = await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=name`, {
@@ -251,30 +278,43 @@ async function fetchMicrosoftBusy(accessToken, weekOffset, email) {
 }
 
 // Fetch all 4 weeks for a user and save to Supabase
-async function refreshUser(name, provider, accessToken) {
+// accounts: for ics = URL string or JSON array of URLs
+//           for google/microsoft = [{email, refresh_token}]
+async function refreshUser(name, provider, accounts) {
   const busyWeeks = {};
   if (provider === 'ics') {
-    let urls; try { urls = JSON.parse(accessToken); if (!Array.isArray(urls)) throw 0; } catch { urls = [accessToken]; }
+    let urls; try { urls = JSON.parse(accounts); if (!Array.isArray(urls)) throw 0; } catch { urls = [accounts]; }
     for (let i = 0; i < 4; i++) {
       const merged = {};
       for (const u of urls) { try { Object.assign(merged, await fetchIcsBusy(u, i)); } catch (e) { console.error('ICS refresh failed:', u, e.message); } }
       busyWeeks[i] = merged;
     }
   } else {
-    let msEmail = null;
-    if (provider === 'microsoft') {
-      const r = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', {
-        headers: { 'Authorization': 'Bearer ' + accessToken }
-      });
-      if (!r.ok) throw new Error('Microsoft /me: ' + r.status);
-      const me = await r.json();
-      msEmail = me.mail || me.userPrincipalName;
-      if (!msEmail) throw new Error('Could not determine Microsoft account email');
-    }
+    // Get a fresh access token for each account upfront, resolve MS email
+    const live = (await Promise.all(accounts.map(async acct => {
+      try {
+        const at = provider === 'google' ? await getNewGoogleToken(acct.refresh_token) : await getNewMicrosoftToken(acct.refresh_token);
+        let email = acct.email;
+        if (provider === 'microsoft') {
+          const r = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', { headers: { Authorization: 'Bearer ' + at } });
+          if (!r.ok) throw new Error('Microsoft /me: ' + r.status);
+          const me = await r.json();
+          email = me.mail || me.userPrincipalName;
+          if (!email) throw new Error('Could not determine Microsoft account email');
+        }
+        return { at, email };
+      } catch (e) { console.error(`Token refresh failed for ${acct.email || 'unknown'}:`, e.message); return null; }
+    }))).filter(Boolean);
     for (let i = 0; i < 4; i++) {
-      busyWeeks[i] = provider === 'google'
-        ? await fetchGoogleBusy(accessToken, i)
-        : await fetchMicrosoftBusy(accessToken, i, msEmail);
+      const merged = {};
+      for (const { at, email } of live) {
+        try {
+          Object.assign(merged, provider === 'google'
+            ? await fetchGoogleBusy(at, i)
+            : await fetchMicrosoftBusy(at, i, email));
+        } catch (e) { console.error(`Busy fetch failed for ${email}:`, e.message); }
+      }
+      busyWeeks[i] = merged;
     }
   }
   await saveAvailability(name, provider, busyWeeks);
@@ -311,7 +351,7 @@ app.get('/auth/google', (req, res) => {
     client_id: GOOGLE_CLIENT_ID,
     redirect_uri: GOOGLE_REDIRECT,
     response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/calendar.freebusy',
+    scope: 'https://www.googleapis.com/auth/calendar.freebusy openid email',
     access_type: 'offline',
     prompt: 'consent',
     state: name
@@ -330,8 +370,19 @@ app.get('/auth/google/callback', async (req, res) => {
     });
     const tokens = await tokenRes.json();
     if (!tokens.refresh_token) throw new Error('No refresh token returned — ensure prompt=consent');
-    await saveToken(name, 'google', tokens.refresh_token);
-    await refreshUser(name, 'google', tokens.access_token);
+    // Extract email from ID token (included because we requested openid+email scope)
+    let newEmail = null;
+    if (tokens.id_token) {
+      try { newEmail = JSON.parse(Buffer.from(tokens.id_token.split('.')[1], 'base64url').toString()).email; } catch {}
+    }
+    // Merge into existing account array for this user
+    const existing = await getTokensForUser(name, 'google');
+    const idx = newEmail ? existing.findIndex(t => t.email === newEmail) : -1;
+    if (idx >= 0) existing[idx].refresh_token = tokens.refresh_token;
+    else existing.push({ email: newEmail, refresh_token: tokens.refresh_token });
+    await saveToken(name, 'google', JSON.stringify(existing));
+    await updateCalAccounts(name, 'google', existing.map(t => t.email).filter(Boolean));
+    await refreshUser(name, 'google', existing);
     res.redirect(`${FRONTEND_URL}?connected=google&name=${encodeURIComponent(name)}`);
   } catch (e) {
     console.error('Google callback error:', e);
@@ -364,8 +415,18 @@ app.get('/auth/microsoft/callback', async (req, res) => {
     });
     const tokens = await tokenRes.json();
     if (!tokens.refresh_token) throw new Error('No refresh token returned');
-    await saveToken(name, 'microsoft', tokens.refresh_token);
-    await refreshUser(name, 'microsoft', tokens.access_token);
+    // Get email for this account
+    const meRes = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', { headers: { Authorization: 'Bearer ' + tokens.access_token } });
+    const me = meRes.ok ? await meRes.json() : {};
+    const newEmail = me.mail || me.userPrincipalName || null;
+    // Merge into existing account array for this user
+    const existing = await getTokensForUser(name, 'microsoft');
+    const idx = newEmail ? existing.findIndex(t => t.email === newEmail) : -1;
+    if (idx >= 0) existing[idx].refresh_token = tokens.refresh_token;
+    else existing.push({ email: newEmail, refresh_token: tokens.refresh_token });
+    await saveToken(name, 'microsoft', JSON.stringify(existing));
+    await updateCalAccounts(name, 'microsoft', existing.map(t => t.email).filter(Boolean));
+    await refreshUser(name, 'microsoft', existing);
     res.redirect(`${FRONTEND_URL}?connected=microsoft&name=${encodeURIComponent(name)}`);
   } catch (e) {
     console.error('Microsoft callback error:', e);
@@ -379,12 +440,17 @@ app.post('/api/refresh', async (req, res) => {
     const tokenRows = await getAllTokens();
     const results = await Promise.all(tokenRows.map(async row => {
       try {
-        const accessToken = row.provider === 'google'
-          ? await getNewGoogleToken(row.refresh_token)
-          : row.provider === 'microsoft'
-          ? await getNewMicrosoftToken(row.refresh_token)
-          : row.refresh_token; // ICS: stored value is the URL itself
-        await refreshUser(row.name, row.provider, accessToken);
+        let tokenSource;
+        if (row.provider === 'ics') {
+          tokenSource = row.refresh_token;
+        } else {
+          // Try to parse as [{email, refresh_token}] array; fall back to plain token for legacy rows
+          try {
+            const arr = JSON.parse(row.refresh_token);
+            tokenSource = Array.isArray(arr) ? arr : [{ email: null, refresh_token: row.refresh_token }];
+          } catch { tokenSource = [{ email: null, refresh_token: row.refresh_token }]; }
+        }
+        await refreshUser(row.name, row.provider, tokenSource);
         return { name: row.name, ok: true };
       } catch (e) {
         console.error(`Refresh failed for ${row.name}:`, e.message);
@@ -421,6 +487,7 @@ app.post('/api/connect-ics', async (req, res) => {
     }
     await saveToken(name, 'ics', JSON.stringify(urls));
     await saveAvailability(name, 'ics', busyWeeks);
+    await updateCalAccounts(name, 'ics', urls.length);
     res.json({ ok: true, count: urls.length });
   } catch (e) {
     console.error('ICS connect error:', e);
