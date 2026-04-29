@@ -55,10 +55,30 @@ async function saveAvailability(name, provider, busyWeeks) {
       updated_at: new Date().toISOString()
     })
   });
-  if (!r.ok) console.error('saveAvailability failed:', await r.text());
+  if (!r.ok) throw new Error('saveAvailability failed: ' + await r.text());
 }
 
 // ── ICS parser ───────────────────────────────────────────────
+// Map Windows timezone names (used by Outlook) to IANA names
+const WIN_TZ = {
+  'Eastern Standard Time': 'America/New_York',
+  'Eastern Summer Time': 'America/New_York',
+  'Central Standard Time': 'America/Chicago',
+  'Mountain Standard Time': 'America/Denver',
+  'Pacific Standard Time': 'America/Los_Angeles',
+  'Alaska Standard Time': 'America/Anchorage',
+  'Hawaii-Aleutian Standard Time': 'Pacific/Honolulu',
+  'Greenwich Standard Time': 'Europe/London',
+  'GMT Standard Time': 'Europe/London',
+  'W. Europe Standard Time': 'Europe/Berlin',
+  'Central Europe Standard Time': 'Europe/Budapest',
+  'Romance Standard Time': 'Europe/Paris',
+  'China Standard Time': 'Asia/Shanghai',
+  'Tokyo Standard Time': 'Asia/Tokyo',
+  'India Standard Time': 'Asia/Kolkata',
+  'AUS Eastern Standard Time': 'Australia/Sydney',
+};
+
 function tzOffsetMinutes(date, tzid) {
   const utcMs = date.getTime();
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -79,16 +99,22 @@ function parseIcsDate(prop, val) {
   if (!m) return null;
   const [, yr, mo, dy, hr, min, sec, z] = m;
   if (z === 'Z') return new Date(Date.UTC(+yr, +mo - 1, +dy, +hr, +min, +sec));
-  const tzid = (prop.match(/TZID=([^;:]+)/i) || [])[1];
+  const rawTzid = (prop.match(/TZID=([^;:]+)/i) || [])[1];
+  const tzid = rawTzid ? (WIN_TZ[rawTzid] || rawTzid) : null;
   const ref = new Date(Date.UTC(+yr, +mo - 1, +dy, +hr, +min, +sec));
   if (tzid) { try { return new Date(ref.getTime() + tzOffsetMinutes(ref, tzid) * 60000); } catch (e) {} }
   return ref;
 }
 
+function parseDuration(s) {
+  const dm = s.match(/P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?/);
+  return dm ? ((+(dm[1]||0))*86400 + (+(dm[2]||0))*3600 + (+(dm[3]||0))*60 + (+(dm[4]||0))) * 1000 : 0;
+}
+
 function parseIcs(text) {
   const lines = text.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '').split(/\r?\n/);
   const periods = [];
-  let inEvent = false, dtstart = null, dtend = null;
+  let inEvent = false, inFreebusy = false, dtstart = null, dtend = null;
   for (const raw of lines) {
     const line = raw.trim();
     if (line === 'BEGIN:VEVENT') { inEvent = true; dtstart = dtend = null; continue; }
@@ -96,24 +122,40 @@ function parseIcs(text) {
       if (dtstart && dtend) periods.push({ start: dtstart.toISOString(), end: dtend.toISOString() });
       inEvent = false; continue;
     }
-    if (!inEvent) continue;
+    if (line === 'BEGIN:VFREEBUSY') { inFreebusy = true; continue; }
+    if (line === 'END:VFREEBUSY') { inFreebusy = false; continue; }
+    if (!inEvent && !inFreebusy) continue;
     const ci = line.indexOf(':');
     if (ci < 0) continue;
     const prop = line.substring(0, ci), val = line.substring(ci + 1);
     const key = prop.split(';')[0].toUpperCase();
-    if (key === 'DTSTART') dtstart = parseIcsDate(prop, val);
-    else if (key === 'DTEND') dtend = parseIcsDate(prop, val);
-    else if (key === 'DURATION' && dtstart) {
-      const dm = val.match(/P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?/);
-      if (dm) dtend = new Date(dtstart.getTime() +
-        ((+(dm[1]||0))*86400 + (+(dm[2]||0))*3600 + (+(dm[3]||0))*60 + (+(dm[4]||0))) * 1000);
+    if (inEvent) {
+      if (key === 'DTSTART') dtstart = parseIcsDate(prop, val);
+      else if (key === 'DTEND') dtend = parseIcsDate(prop, val);
+      else if (key === 'DURATION' && dtstart) {
+        const ms = parseDuration(val);
+        if (ms) dtend = new Date(dtstart.getTime() + ms);
+      }
+    } else if (inFreebusy && key === 'FREEBUSY') {
+      // Skip explicitly free periods; FREEBUSY with no FBTYPE or FBTYPE=BUSY/TENTATIVE/OOF counts as busy
+      if (/FBTYPE=FREE/i.test(prop)) continue;
+      for (const fbv of val.split(',')) {
+        const slash = fbv.indexOf('/');
+        if (slash < 0) continue;
+        const start = parseIcsDate('', fbv.substring(0, slash));
+        const endPart = fbv.substring(slash + 1);
+        const end = /^P/.test(endPart) && start
+          ? new Date(start.getTime() + parseDuration(endPart))
+          : parseIcsDate('', endPart);
+        if (start && end) periods.push({ start: start.toISOString(), end: end.toISOString() });
+      }
     }
   }
   return periods;
 }
 
 async function fetchIcsBusy(icsUrl, weekOffset) {
-  const r = await fetch(icsUrl);
+  const r = await fetch(icsUrl.replace(/^webcal:\/\//i, 'https://'));
   if (!r.ok) throw new Error('ICS fetch: ' + r.status);
   const periods = parseIcs(await r.text());
   return busyPeriodsToSlots(periods, getWeekDates(weekOffset));
@@ -212,7 +254,12 @@ async function fetchMicrosoftBusy(accessToken, weekOffset, email) {
 async function refreshUser(name, provider, accessToken) {
   const busyWeeks = {};
   if (provider === 'ics') {
-    for (let i = 0; i < 4; i++) busyWeeks[i] = await fetchIcsBusy(accessToken, i);
+    let urls; try { urls = JSON.parse(accessToken); if (!Array.isArray(urls)) throw 0; } catch { urls = [accessToken]; }
+    for (let i = 0; i < 4; i++) {
+      const merged = {};
+      for (const u of urls) { try { Object.assign(merged, await fetchIcsBusy(u, i)); } catch (e) { console.error('ICS refresh failed:', u, e.message); } }
+      busyWeeks[i] = merged;
+    }
   } else {
     let msEmail = null;
     if (provider === 'microsoft') {
@@ -354,11 +401,27 @@ app.post('/api/connect-ics', async (req, res) => {
   const { name, icsUrl } = req.body;
   if (!name || !icsUrl) return res.status(400).json({ error: 'Missing name or icsUrl' });
   try {
+    const url = icsUrl.trim().replace(/^webcal:\/\//i, 'https://');
+    // Merge with any existing ICS URLs for this user
+    let urls = [url];
+    try {
+      const existing = await sbFetch(`tokens?name=eq.${encodeURIComponent(name)}&provider=eq.ics&select=refresh_token`);
+      if (existing.length > 0) {
+        let prev; try { prev = JSON.parse(existing[0].refresh_token); if (!Array.isArray(prev)) prev = [existing[0].refresh_token]; } catch { prev = [existing[0].refresh_token]; }
+        if (!prev.includes(url)) prev.push(url);
+        urls = prev;
+      }
+    } catch (e) {}
+    // Fetch and merge busy slots from all URLs
     const busyWeeks = {};
-    for (let i = 0; i < 4; i++) busyWeeks[i] = await fetchIcsBusy(icsUrl, i);
-    await saveToken(name, 'ics', icsUrl);
+    for (let i = 0; i < 4; i++) {
+      const merged = {};
+      for (const u of urls) { try { Object.assign(merged, await fetchIcsBusy(u, i)); } catch (e) { console.error('ICS fetch failed:', u, e.message); } }
+      busyWeeks[i] = merged;
+    }
+    await saveToken(name, 'ics', JSON.stringify(urls));
     await saveAvailability(name, 'ics', busyWeeks);
-    res.json({ ok: true });
+    res.json({ ok: true, count: urls.length });
   } catch (e) {
     console.error('ICS connect error:', e);
     res.status(500).json({ error: e.message });

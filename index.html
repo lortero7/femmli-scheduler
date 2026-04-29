@@ -92,12 +92,15 @@ table.g td.tl{font-family:var(--mono);font-size:10px;color:var(--txF);text-align
 
 /* pills */
 .pills{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:1rem;}
-.pill{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:20px;font-size:12px;font-weight:500;border:1px solid var(--bdrS);background:var(--srf);color:var(--txM);cursor:pointer;transition:all .12s;user-select:none;}
+.pill{display:inline-flex;flex-direction:column;align-items:flex-start;padding:5px 11px;border-radius:12px;font-size:12px;font-weight:500;border:1px solid var(--bdrS);background:var(--srf);color:var(--txM);cursor:pointer;transition:all .12s;user-select:none;}
 .pill:hover{border-color:var(--ac);color:var(--ac);}
 .pill.on{background:var(--ac);border-color:var(--ac);color:#fff;}
-.pill .rm{font-size:15px;line-height:1;opacity:.5;cursor:pointer;margin-left:2px;}
+.pill-top{display:flex;align-items:center;gap:5px;width:100%;}
+.pill-sub{font-size:10px;font-family:var(--mono);opacity:.65;padding-left:12px;line-height:1.3;margin-top:2px;}
+.pill.on .pill-sub{opacity:.8;}
+.pill .rm{font-size:15px;line-height:1;opacity:.5;cursor:pointer;margin-left:auto;}
 .pill .rm:hover{opacity:1;}
-.pill .cal-dot{width:7px;height:7px;border-radius:50%;display:inline-block;}
+.pill .cal-dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex-shrink:0;}
 
 .fbar{display:flex;gap:10px;align-items:center;margin-bottom:1.25rem;flex-wrap:wrap;}
 .fbar label{font-size:11px;font-family:var(--mono);color:var(--txM);white-space:nowrap;}
@@ -357,13 +360,14 @@ async function sbDelete(name){
 function parseDb(rows){
   const out={};
   rows.forEach(row=>{
-    const parse=v=>{try{return typeof v==='string'?JSON.parse(v||'{}'):(v||{});}catch{return{};}};
+    const parseCal=v=>{try{return v&&typeof v==='string'?JSON.parse(v):null;}catch{return null;}};
+    const parseCells=v=>{try{return v&&typeof v==='string'?JSON.parse(v):{};}catch{return{};}};
     out[row.name.toLowerCase()]={
       name:row.name,
-      cells:parse(row.cells),
-      google_busy:parse(row.google_busy),
-      microsoft_busy:parse(row.microsoft_busy),
-      ics_busy:parse(row.ics_busy),
+      cells:parseCells(row.cells),
+      google_busy:parseCal(row.google_busy),
+      microsoft_busy:parseCal(row.microsoft_busy),
+      ics_busy:parseCal(row.ics_busy),
       cal_provider:row.cal_provider||''
     };
   });
@@ -410,7 +414,9 @@ async function connectIcs(){
       buildSGrid(0);
       if(ex.cells)loadSCells(ex.cells);
     }
-    st.textContent='ICS calendar connected ✓';st.className='cal-status ok';
+    const count=d.count||1;
+    st.textContent=count>1?`${count} ICS calendars connected ✓`:'ICS calendar connected ✓';
+    st.className='cal-status ok';
   }catch(e){st.textContent='Connection failed: '+e.message;st.className='cal-status err';}
 }
 
@@ -468,6 +474,7 @@ function updateCalBtns(){
   const ex=db[cname.toLowerCase()];
   const gOn=calProvider==='google'||!!(ex&&ex.google_busy);
   const mOn=calProvider==='microsoft'||!!(ex&&ex.microsoft_busy);
+  const iOn=!!(ex&&ex.ics_busy);
   if(gOn){
     gBtn.className='btn connected';
     gBtn.innerHTML=`<svg class="gicon" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg> Google connected ✓`;
@@ -475,6 +482,10 @@ function updateCalBtns(){
   if(mOn){
     msBtn.className='btn connected';
     msBtn.innerHTML=`<svg class="msicon" viewBox="0 0 24 24"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#00a4ef" d="M13 1h10v10H13z"/><path fill="#7fba00" d="M1 13h10v10H1z"/><path fill="#ffb900" d="M13 13h10v10H13z"/></svg> Microsoft connected ✓`;
+  }
+  if(iOn){
+    const st=document.getElementById('icsStatus');
+    if(st&&!st.textContent){st.textContent='ICS calendar connected ✓';st.className='cal-status ok';}
   }
 }
 
@@ -571,7 +582,7 @@ function getMergedBusy(person,weekOffset){
 function isAvailable(person,key,weekOffset){
   const busy=getMergedBusy(person,weekOffset);
   if(busy[key])return false;
-  if(person.cal_provider||person.ics_busy)return true;
+  if(person.cal_provider||person.google_busy||person.microsoft_busy||person.ics_busy)return true;
   return !!(person.cells&&person.cells[key]);
 }
 
@@ -596,16 +607,23 @@ function buildPills(ppl){
   ppl.forEach(p=>{
     const pill=document.createElement('div');
     pill.className='pill'+(sel.has(p.name)?' on':'');
+    const top=document.createElement('div');top.className='pill-top';
     const dot=document.createElement('span');dot.className='cal-dot';
     const hasG=!!p.google_busy,hasM=!!p.microsoft_busy,hasI=!!p.ics_busy;
     const calCount=[hasG,hasM,hasI].filter(Boolean).length;
     dot.style.background=calCount>1?'#7c5cbf':hasG?'#4285F4':hasM?'#00a4ef':hasI?'#e07b2a':'#b2b0a8';
-    dot.title=[hasG&&'Google',hasM&&'Microsoft',hasI&&'ICS'].filter(Boolean).join(' + ')||'manual';
     const sp=document.createElement('span');sp.textContent=p.name;
     const rm=document.createElement('span');rm.className='rm';rm.textContent='×';
-    pill.append(dot,sp,rm);
+    top.append(dot,sp,rm);
+    pill.appendChild(top);
+    const calLabels=[hasG&&'Google',hasM&&'Microsoft',hasI&&'ICS'].filter(Boolean);
+    if(calLabels.length){
+      const sub=document.createElement('div');sub.className='pill-sub';
+      sub.textContent=calLabels.join(' · ');
+      pill.appendChild(sub);
+    }
     const toggle=()=>{sel.has(p.name)?sel.delete(p.name):sel.add(p.name);pill.classList.toggle('on',sel.has(p.name));drawHeat();updSC();};
-    sp.addEventListener('click',toggle);dot.addEventListener('click',toggle);
+    pill.addEventListener('click',e=>{if(e.target===rm)return;toggle();});
     rm.addEventListener('click',async e=>{
       e.stopPropagation();
       if(!confirm(`Remove ${p.name}?`))return;
