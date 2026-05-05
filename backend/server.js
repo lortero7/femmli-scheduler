@@ -196,7 +196,7 @@ function parseIcs(text) {
     const line = raw.trim();
     if (line === 'BEGIN:VEVENT') { inEvent = true; dtstart = dtend = rrule = null; isAllDay = false; continue; }
     if (line === 'END:VEVENT') {
-      if (dtstart && dtend && !isAllDay) {
+      if (dtstart && dtend && !isAllDay && (dtend.getTime() - dtstart.getTime()) < 24 * 3600 * 1000) {
         const recur = rrule ? expandRRule(rrule, dtstart, dtend) : null;
         if (recur) periods.push(...recur);
         else periods.push({ start: dtstart.toISOString(), end: dtend.toISOString() });
@@ -229,7 +229,7 @@ function parseIcs(text) {
         const end = /^P/.test(endPart) && start
           ? new Date(start.getTime() + parseDuration(endPart))
           : parseIcsDate('', endPart);
-        if (start && end) periods.push({ start: start.toISOString(), end: end.toISOString() });
+        if (start && end && (end.getTime() - start.getTime()) < 24 * 3600 * 1000) periods.push({ start: start.toISOString(), end: end.toISOString() });
       }
     }
   }
