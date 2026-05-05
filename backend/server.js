@@ -191,12 +191,12 @@ function parseDuration(s) {
 function parseIcs(text) {
   const lines = text.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '').split(/\r?\n/);
   const periods = [];
-  let inEvent = false, inFreebusy = false, dtstart = null, dtend = null, rrule = null;
+  let inEvent = false, inFreebusy = false, dtstart = null, dtend = null, rrule = null, isAllDay = false;
   for (const raw of lines) {
     const line = raw.trim();
-    if (line === 'BEGIN:VEVENT') { inEvent = true; dtstart = dtend = rrule = null; continue; }
+    if (line === 'BEGIN:VEVENT') { inEvent = true; dtstart = dtend = rrule = null; isAllDay = false; continue; }
     if (line === 'END:VEVENT') {
-      if (dtstart && dtend) {
+      if (dtstart && dtend && !isAllDay) {
         const recur = rrule ? expandRRule(rrule, dtstart, dtend) : null;
         if (recur) periods.push(...recur);
         else periods.push({ start: dtstart.toISOString(), end: dtend.toISOString() });
@@ -211,7 +211,7 @@ function parseIcs(text) {
     const prop = line.substring(0, ci), val = line.substring(ci + 1);
     const key = prop.split(';')[0].toUpperCase();
     if (inEvent) {
-      if (key === 'DTSTART') dtstart = parseIcsDate(prop, val);
+      if (key === 'DTSTART') { isAllDay = /VALUE=DATE(?!-TIME)/i.test(prop); dtstart = parseIcsDate(prop, val); }
       else if (key === 'DTEND') dtend = parseIcsDate(prop, val);
       else if (key === 'RRULE') rrule = val;
       else if (key === 'DURATION' && dtstart) {
@@ -303,7 +303,9 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
   });
   if (!r.ok) throw new Error('Google freeBusy: ' + r.status + ' ' + await r.text());
   const data = await r.json();
-  return busyPeriodsToSlots(data.calendars?.primary?.busy || [], dates);
+  const allPeriods = data.calendars?.primary?.busy || [];
+  const timedPeriods = allPeriods.filter(p => new Date(p.end) - new Date(p.start) < 24 * 3600 * 1000);
+  return busyPeriodsToSlots(timedPeriods, dates);
 }
 
 async function fetchMicrosoftBusy(accessToken, weekOffset, email) {
@@ -326,7 +328,7 @@ async function fetchMicrosoftBusy(accessToken, weekOffset, email) {
   const data = await r.json();
   const periods = [];
   (data.value || []).forEach(s => (s.scheduleItems || []).forEach(item => {
-    if (['busy', 'tentative', 'oof'].includes(item.status) && item.start?.dateTime && item.end?.dateTime)
+    if (['busy', 'tentative', 'oof'].includes(item.status) && item.start?.dateTime && item.end?.dateTime && !item.isAllDay)
       periods.push({ start: item.start.dateTime + 'Z', end: item.end.dateTime + 'Z' });
   }));
   return busyPeriodsToSlots(periods, dates);
