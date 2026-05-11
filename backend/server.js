@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const { randomUUID } = require('crypto');
 const app = express();
 
 app.use(cors({ origin: new URL(process.env.FRONTEND_URL || 'https://lortero7.github.io/team-availability').origin }));
@@ -30,23 +31,37 @@ async function sbFetch(path, opts = {}) {
   return r.json();
 }
 
-async function saveToken(name, provider, refreshToken) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/tokens?on_conflict=name,provider`, {
+// OAuth state encoding — carries both name and teamId through the OAuth round-trip
+function encodeState(name, teamId) {
+  return JSON.stringify({ name, teamId });
+}
+
+function decodeState(raw) {
+  try {
+    const obj = JSON.parse(raw || '{}');
+    return { name: obj.name || '', teamId: obj.teamId || '' };
+  } catch {
+    return { name: raw || '', teamId: '' };
+  }
+}
+
+async function saveToken(teamId, name, provider, refreshToken) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/tokens?on_conflict=team_id,name,provider`, {
     method: 'POST',
     headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
-    body: JSON.stringify({ name, provider, refresh_token: refreshToken, updated_at: new Date().toISOString() })
+    body: JSON.stringify({ team_id: teamId, name, provider, refresh_token: refreshToken, updated_at: new Date().toISOString() })
   });
   if (!r.ok) console.error('saveToken failed:', await r.text());
 }
 
-async function getAllTokens() {
-  return sbFetch('tokens?select=name,provider,refresh_token');
+async function getAllTokens(teamId) {
+  const filter = teamId ? `team_id=eq.${encodeURIComponent(teamId)}&` : '';
+  return sbFetch(`tokens?${filter}select=team_id,name,provider,refresh_token`);
 }
 
-// Returns [{email, refresh_token}] for a user+provider, or [] if none stored
-async function getTokensForUser(name, provider) {
+async function getTokensForUser(teamId, name, provider) {
   try {
-    const rows = await sbFetch(`tokens?name=eq.${encodeURIComponent(name)}&provider=eq.${provider}&select=refresh_token`);
+    const rows = await sbFetch(`tokens?team_id=eq.${encodeURIComponent(teamId)}&name=eq.${encodeURIComponent(name)}&provider=eq.${provider}&select=refresh_token`);
     if (!rows.length) return [];
     try {
       const arr = JSON.parse(rows[0].refresh_token);
@@ -55,27 +70,27 @@ async function getTokensForUser(name, provider) {
   } catch { return []; }
 }
 
-// Stores connected account emails/count in availability.cal_accounts for frontend display
-async function updateCalAccounts(name, provider, value) {
+async function updateCalAccounts(teamId, name, provider, value) {
   let accounts = {};
   try {
-    const rows = await sbFetch(`availability?name=eq.${encodeURIComponent(name)}&select=cal_accounts`);
+    const rows = await sbFetch(`availability?team_id=eq.${encodeURIComponent(teamId)}&name=eq.${encodeURIComponent(name)}&select=cal_accounts`);
     if (rows.length && rows[0].cal_accounts) accounts = JSON.parse(rows[0].cal_accounts);
   } catch {}
   accounts[provider] = value;
-  await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=name`, {
+  await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=team_id,name`, {
     method: 'POST',
     headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
-    body: JSON.stringify({ name, cal_accounts: JSON.stringify(accounts), updated_at: new Date().toISOString() })
+    body: JSON.stringify({ team_id: teamId, name, cal_accounts: JSON.stringify(accounts), updated_at: new Date().toISOString() })
   }).catch(e => console.error('updateCalAccounts failed:', e.message));
 }
 
-async function saveAvailability(name, provider, busyWeeks) {
+async function saveAvailability(teamId, name, provider, busyWeeks) {
   const col = provider === 'google' ? 'google_busy' : provider === 'microsoft' ? 'microsoft_busy' : 'ics_busy';
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=name`, {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/availability?on_conflict=team_id,name`, {
     method: 'POST',
     headers: { ...sbHeaders, 'Prefer': 'resolution=merge-duplicates' },
     body: JSON.stringify({
+      team_id: teamId,
       name,
       cal_provider: provider,
       [col]: JSON.stringify(busyWeeks),
@@ -86,7 +101,6 @@ async function saveAvailability(name, provider, busyWeeks) {
 }
 
 // ── ICS parser ───────────────────────────────────────────────
-// Map Windows timezone names (used by Outlook) to IANA names
 const WIN_TZ = {
   'Eastern Standard Time': 'America/New_York',
   'Eastern Summer Time': 'America/New_York',
@@ -129,12 +143,11 @@ function parseIcsDate(prop, val) {
   const rawTzid = (prop.match(/TZID=([^;:]+)/i) || [])[1];
   const tzid = rawTzid ? (WIN_TZ[rawTzid] || rawTzid) : null;
   const ref = new Date(Date.UTC(+yr, +mo - 1, +dy, +hr, +min, +sec));
-  const tz = tzid || 'America/New_York'; // floating times: assume Eastern
+  const tz = tzid || 'America/New_York';
   try { return new Date(ref.getTime() + tzOffsetMinutes(ref, tz) * 60000); } catch (e) {}
   return ref;
 }
 
-// Expand RRULE for WEEKLY and DAILY recurrences over a 6-week window
 function expandRRule(rrule, dtstart, dtend) {
   const freq = ((rrule.match(/FREQ=([^;]+)/i)||[])[1]||'').toUpperCase();
   if (freq !== 'WEEKLY' && freq !== 'DAILY') return null;
@@ -219,7 +232,6 @@ function parseIcs(text) {
         if (ms) dtend = new Date(dtstart.getTime() + ms);
       }
     } else if (inFreebusy && key === 'FREEBUSY') {
-      // Skip explicitly free periods; FREEBUSY with no FBTYPE or FBTYPE=BUSY/TENTATIVE/OOF counts as busy
       if (/FBTYPE=FREE/i.test(prop)) continue;
       for (const fbv of val.split(',')) {
         const slash = fbv.indexOf('/');
@@ -247,14 +259,13 @@ async function fetchIcsBusy(icsUrl, weekOffset) {
 const SLOTS = [];
 for (let h = 8; h < 21; h++) { SLOTS.push({ h, m: 0 }); SLOTS.push({ h, m: 30 }); }
 
-// Railway runs UTC — use Intl to get real Eastern offset (-4 EDT / -5 EST)
 function getEasternOffset(date) {
   const noonUTC = new Date(date);
   noonUTC.setUTCHours(12, 0, 0, 0);
   const h = parseInt(new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', hour: 'numeric', hour12: false
   }).format(noonUTC));
-  return h - 12; // -4 for EDT, -5 for EST
+  return h - 12;
 }
 
 function easternOffsetStr(offset) {
@@ -262,7 +273,6 @@ function easternOffsetStr(offset) {
 }
 
 function getWeekDates(offset = 0) {
-  // Get today's date in Eastern time (avoids server UTC being a different calendar day)
   const pacificDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const [y, m, d] = pacificDateStr.split('-').map(Number);
   const today = new Date(Date.UTC(y, m - 1, d));
@@ -334,10 +344,7 @@ async function fetchMicrosoftBusy(accessToken, weekOffset, email) {
   return busyPeriodsToSlots(periods, dates);
 }
 
-// Fetch all 4 weeks for a user and save to Supabase
-// accounts: for ics = URL string or JSON array of URLs
-//           for google/microsoft = [{email, refresh_token}]
-async function refreshUser(name, provider, accounts) {
+async function refreshUser(teamId, name, provider, accounts) {
   const busyWeeks = {};
   if (provider === 'ics') {
     let urls; try { urls = JSON.parse(accounts); if (!Array.isArray(urls)) throw 0; } catch { urls = [accounts]; }
@@ -347,7 +354,6 @@ async function refreshUser(name, provider, accounts) {
       busyWeeks[i] = merged;
     }
   } else {
-    // Get a fresh access token for each account upfront, resolve MS email
     const live = (await Promise.all(accounts.map(async acct => {
       try {
         const at = provider === 'google' ? await getNewGoogleToken(acct.refresh_token) : await getNewMicrosoftToken(acct.refresh_token);
@@ -374,7 +380,7 @@ async function refreshUser(name, provider, accounts) {
       busyWeeks[i] = merged;
     }
   }
-  await saveAvailability(name, provider, busyWeeks);
+  await saveAvailability(teamId, name, provider, busyWeeks);
 }
 
 // ── Token refresh ────────────────────────────────────────────
@@ -400,10 +406,24 @@ async function getNewMicrosoftToken(refreshToken) {
   return data.access_token;
 }
 
+// ── Teams ────────────────────────────────────────────────────
+app.post('/api/teams', async (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Missing team name' });
+  const id = randomUUID();
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/teams`, {
+    method: 'POST',
+    headers: { ...sbHeaders, 'Prefer': 'return=representation' },
+    body: JSON.stringify({ id, name: name.trim(), created_at: new Date().toISOString() })
+  });
+  if (!r.ok) return res.status(500).json({ error: 'Failed to create team: ' + await r.text() });
+  res.json({ id, name: name.trim() });
+});
+
 // ── Google OAuth ─────────────────────────────────────────────
 app.get('/auth/google', (req, res) => {
-  const { name } = req.query;
-  if (!name) return res.status(400).send('Missing name');
+  const { name, team_id: teamId } = req.query;
+  if (!name || !teamId) return res.status(400).send('Missing name or team_id');
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
     redirect_uri: GOOGLE_REDIRECT,
@@ -411,14 +431,16 @@ app.get('/auth/google', (req, res) => {
     scope: 'https://www.googleapis.com/auth/calendar.freebusy openid email',
     access_type: 'offline',
     prompt: 'consent',
-    state: name
+    state: encodeState(name, teamId)
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
 
 app.get('/auth/google/callback', async (req, res) => {
-  const { code, state: name, error } = req.query;
-  if (error) return res.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name || '')}`);
+  const { code, state: stateRaw, error } = req.query;
+  const { name, teamId } = decodeState(stateRaw);
+  const redirectBase = `${FRONTEND_URL}?team=${encodeURIComponent(teamId)}`;
+  if (error) return res.redirect(`${redirectBase}&auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name)}`);
   try {
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
@@ -427,43 +449,43 @@ app.get('/auth/google/callback', async (req, res) => {
     });
     const tokens = await tokenRes.json();
     if (!tokens.refresh_token) throw new Error('No refresh token returned — ensure prompt=consent');
-    // Extract email from ID token (included because we requested openid+email scope)
     let newEmail = null;
     if (tokens.id_token) {
       try { newEmail = JSON.parse(Buffer.from(tokens.id_token.split('.')[1], 'base64url').toString()).email; } catch {}
     }
-    // Merge into existing account array for this user
-    const existing = await getTokensForUser(name, 'google');
+    const existing = await getTokensForUser(teamId, name, 'google');
     const idx = newEmail ? existing.findIndex(t => t.email === newEmail) : -1;
     if (idx >= 0) existing[idx].refresh_token = tokens.refresh_token;
     else existing.push({ email: newEmail, refresh_token: tokens.refresh_token });
-    await saveToken(name, 'google', JSON.stringify(existing));
-    await updateCalAccounts(name, 'google', existing.map(t => t.email).filter(Boolean));
-    await refreshUser(name, 'google', existing);
-    res.redirect(`${FRONTEND_URL}?connected=google&name=${encodeURIComponent(name)}`);
+    await saveToken(teamId, name, 'google', JSON.stringify(existing));
+    await updateCalAccounts(teamId, name, 'google', existing.map(t => t.email).filter(Boolean));
+    await refreshUser(teamId, name, 'google', existing);
+    res.redirect(`${redirectBase}&connected=google&name=${encodeURIComponent(name)}`);
   } catch (e) {
     console.error('Google callback error:', e);
-    res.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(e.message)}&name=${encodeURIComponent(name)}`);
+    res.redirect(`${redirectBase}&auth_error=${encodeURIComponent(e.message)}&name=${encodeURIComponent(name)}`);
   }
 });
 
 // ── Microsoft OAuth ──────────────────────────────────────────
 app.get('/auth/microsoft', (req, res) => {
-  const { name } = req.query;
-  if (!name) return res.status(400).send('Missing name');
+  const { name, team_id: teamId } = req.query;
+  if (!name || !teamId) return res.status(400).send('Missing name or team_id');
   const params = new URLSearchParams({
     client_id: MS_CLIENT_ID,
     redirect_uri: MS_REDIRECT,
     response_type: 'code',
     scope: 'https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/User.Read offline_access',
-    state: name
+    state: encodeState(name, teamId)
   });
   res.redirect(`https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`);
 });
 
 app.get('/auth/microsoft/callback', async (req, res) => {
-  const { code, state: name, error } = req.query;
-  if (error) return res.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name || '')}`);
+  const { code, state: stateRaw, error } = req.query;
+  const { name, teamId } = decodeState(stateRaw);
+  const redirectBase = `${FRONTEND_URL}?team=${encodeURIComponent(teamId)}`;
+  if (error) return res.redirect(`${redirectBase}&auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name)}`);
   try {
     const tokenRes = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
       method: 'POST',
@@ -472,29 +494,28 @@ app.get('/auth/microsoft/callback', async (req, res) => {
     });
     const tokens = await tokenRes.json();
     if (!tokens.refresh_token) throw new Error('No refresh token returned');
-    // Get email for this account
     const meRes = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', { headers: { Authorization: 'Bearer ' + tokens.access_token } });
     const me = meRes.ok ? await meRes.json() : {};
     const newEmail = me.mail || me.userPrincipalName || null;
-    // Merge into existing account array for this user
-    const existing = await getTokensForUser(name, 'microsoft');
+    const existing = await getTokensForUser(teamId, name, 'microsoft');
     const idx = newEmail ? existing.findIndex(t => t.email === newEmail) : -1;
     if (idx >= 0) existing[idx].refresh_token = tokens.refresh_token;
     else existing.push({ email: newEmail, refresh_token: tokens.refresh_token });
-    await saveToken(name, 'microsoft', JSON.stringify(existing));
-    await updateCalAccounts(name, 'microsoft', existing.map(t => t.email).filter(Boolean));
-    await refreshUser(name, 'microsoft', existing);
-    res.redirect(`${FRONTEND_URL}?connected=microsoft&name=${encodeURIComponent(name)}`);
+    await saveToken(teamId, name, 'microsoft', JSON.stringify(existing));
+    await updateCalAccounts(teamId, name, 'microsoft', existing.map(t => t.email).filter(Boolean));
+    await refreshUser(teamId, name, 'microsoft', existing);
+    res.redirect(`${redirectBase}&connected=microsoft&name=${encodeURIComponent(name)}`);
   } catch (e) {
     console.error('Microsoft callback error:', e);
-    res.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(e.message)}&name=${encodeURIComponent(name)}`);
+    res.redirect(`${redirectBase}&auth_error=${encodeURIComponent(e.message)}&name=${encodeURIComponent(name)}`);
   }
 });
 
 // ── Refresh all calendars ────────────────────────────────────
 app.post('/api/refresh', async (req, res) => {
+  const { teamId } = req.body || {};
   try {
-    const tokenRows = await getAllTokens();
+    const tokenRows = await getAllTokens(teamId);
     const results = [];
     for (const row of tokenRows) {
       try {
@@ -507,7 +528,7 @@ app.post('/api/refresh', async (req, res) => {
             tokenSource = Array.isArray(arr) ? arr : [{ email: null, refresh_token: row.refresh_token }];
           } catch { tokenSource = [{ email: null, refresh_token: row.refresh_token }]; }
         }
-        await refreshUser(row.name, row.provider, tokenSource);
+        await refreshUser(row.team_id, row.name, row.provider, tokenSource);
         results.push({ name: row.name, ok: true });
       } catch (e) {
         console.error(`Refresh failed for ${row.name}:`, e.message);
@@ -521,30 +542,28 @@ app.post('/api/refresh', async (req, res) => {
 });
 
 app.post('/api/connect-ics', async (req, res) => {
-  const { name, icsUrl } = req.body;
-  if (!name || !icsUrl) return res.status(400).json({ error: 'Missing name or icsUrl' });
+  const { name, icsUrl, teamId } = req.body;
+  if (!name || !icsUrl || !teamId) return res.status(400).json({ error: 'Missing name, icsUrl, or teamId' });
   try {
     const url = icsUrl.trim().replace(/^webcal:\/\//i, 'https://');
-    // Merge with any existing ICS URLs for this user
     let urls = [url];
     try {
-      const existing = await sbFetch(`tokens?name=eq.${encodeURIComponent(name)}&provider=eq.ics&select=refresh_token`);
+      const existing = await sbFetch(`tokens?team_id=eq.${encodeURIComponent(teamId)}&name=eq.${encodeURIComponent(name)}&provider=eq.ics&select=refresh_token`);
       if (existing.length > 0) {
         let prev; try { prev = JSON.parse(existing[0].refresh_token); if (!Array.isArray(prev)) prev = [existing[0].refresh_token]; } catch { prev = [existing[0].refresh_token]; }
         if (!prev.includes(url)) prev.push(url);
         urls = prev;
       }
     } catch (e) {}
-    // Fetch and merge busy slots from all URLs
     const busyWeeks = {};
     for (let i = 0; i < 4; i++) {
       const merged = {};
       for (const u of urls) { try { Object.assign(merged, await fetchIcsBusy(u, i)); } catch (e) { console.error('ICS fetch failed:', u, e.message); } }
       busyWeeks[i] = merged;
     }
-    await saveToken(name, 'ics', JSON.stringify(urls));
-    await saveAvailability(name, 'ics', busyWeeks);
-    await updateCalAccounts(name, 'ics', urls.length);
+    await saveToken(teamId, name, 'ics', JSON.stringify(urls));
+    await saveAvailability(teamId, name, 'ics', busyWeeks);
+    await updateCalAccounts(teamId, name, 'ics', urls.length);
     res.json({ ok: true, count: urls.length });
   } catch (e) {
     console.error('ICS connect error:', e);
@@ -554,4 +573,4 @@ app.post('/api/connect-ics', async (req, res) => {
 
 app.get('/health', (_, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => console.log(`Femmli backend listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`Backend listening on port ${PORT}`));

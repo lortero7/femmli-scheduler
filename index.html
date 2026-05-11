@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Femmli &mdash; Availability</title>
+<title>Team Availability</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap');
 
@@ -135,6 +135,20 @@ select{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid 
 .tz-seg button:last-child{border-right:none;}
 .tz-seg button.on{background:var(--ac);color:#fff;}
 
+/* landing screen */
+.landing-hero{max-width:500px;margin-bottom:2.5rem;}
+.landing-hero h1{font-size:28px;margin-bottom:.5rem;}
+.landing-features{display:flex;flex-direction:column;gap:6px;margin-bottom:2rem;padding-left:0;list-style:none;}
+.landing-features li{font-size:13px;color:var(--txM);display:flex;align-items:baseline;gap:8px;}
+.landing-features li::before{content:'·';color:var(--ac);font-weight:700;flex-shrink:0;}
+.landing-form{background:var(--srf);border:1px solid var(--bdr);border-radius:8px;padding:1.5rem;max-width:420px;}
+.landing-form label{font-size:11px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--txM);display:block;margin-bottom:6px;}
+.landing-form input{max-width:100%;width:100%;margin-bottom:10px;}
+.link-copy{display:flex;align-items:center;gap:8px;padding:.6rem .85rem;background:var(--bg);border:1px solid var(--bdr);border-radius:var(--r);margin-top:1rem;}
+.link-copy span{font-family:var(--mono);font-size:11px;color:var(--txM);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.link-copy button{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:3px;border:1px solid var(--bdrS);background:var(--srf);color:var(--txM);cursor:pointer;white-space:nowrap;flex-shrink:0;}
+.link-copy button:hover{background:var(--acL);border-color:var(--ac);color:var(--ac);}
+
 @media(max-width:600px){
   :root{--cw:38px;--ch:19px;}
   .shell{padding:1.25rem 1rem;}
@@ -144,10 +158,30 @@ select{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid 
 </head>
 <body>
 <div class="shell">
-  <div class="topbar"><span class="logo">Femmli &mdash; Scheduling</span></div>
+  <div class="topbar"><span class="logo" id="topbarLogo">Team Availability</span></div>
+
+  <!-- LANDING (shown when no ?team= param) -->
+  <div id="s-landing" class="scr on">
+    <div class="landing-hero">
+      <h1>Team Availability</h1>
+      <p class="sub">Replace When2Meet with live calendar data. Create a session, share the link — teammates connect their Google or Microsoft calendar once, and you'll see everyone's free/busy grid in real time.</p>
+      <ul class="landing-features">
+        <li>No event details shared — only busy/free per 30-minute block</li>
+        <li>Google, Microsoft, and ICS calendars supported</li>
+        <li>Automatic refresh — always shows current availability</li>
+        <li>Works for any team, not just femmli</li>
+      </ul>
+    </div>
+    <div class="landing-form">
+      <label for="teamNameIn">Team name</label>
+      <input type="text" id="teamNameIn" placeholder="e.g. Product team" maxlength="60" onkeydown="if(event.key==='Enter')createTeam()"/>
+      <button class="btn pri" style="width:100%;justify-content:center;" onclick="createTeam()">Create scheduling link →</button>
+      <div id="landingSt" class="stline"></div>
+    </div>
+  </div>
 
   <!-- SUBMIT -->
-  <div id="s-submit" class="scr on">
+  <div id="s-submit" class="scr">
     <h1>Connect your calendar</h1>
     <p class="sub">Sign in with Google or Microsoft to sync your real-time availability. Only busy/free status is shared — no event details, titles, or descriptions are ever visible to anyone.</p>
 
@@ -266,7 +300,7 @@ select{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid 
   </div>
 </div>
 
-<div class="bnav">
+<div class="bnav" id="bnav">
   <div class="binner">
     <button class="ntab on" id="nt-submit" onclick="go('submit')">My availability</button>
     <button class="ntab" id="nt-dash" onclick="go('dash')">Dashboard</button>
@@ -279,8 +313,10 @@ const SB_URL = 'https://nmonucpefqvbuycpqtim.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5tb251Y3BlZnF2YnV5Y3BxdGltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MTIxMTEsImV4cCI6MjA5MTM4ODExMX0.Dqe_jurWQCSMC77Y-GHjcy7XSo0yAWJ6TSi5srHzmVo';
 const SB_HEADERS = {'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY};
 const TABLE = `${SB_URL}/rest/v1/availability`;
-// Fill this in after deploying the backend to Railway:
 const BACKEND_URL = 'https://team-availability-production.up.railway.app';
+
+// Extracted from URL at page load — null means show landing screen
+const teamId = new URLSearchParams(window.location.search).get('team');
 
 // ── Time constants ───────────────────────────────────────────
 const DAYS = ['Mon','Tue','Wed','Thu','Fri'];
@@ -288,7 +324,7 @@ const SLOTS = [];
 for(let h=8;h<21;h++){SLOTS.push({h,m:0});SLOTS.push({h,m:30});}
 function fmt(h,m){const ap=h<12?'am':'pm';const hh=h>12?h-12:(h===0?12:h);return`${hh}:${m===0?'00':'30'}${ap}`;}
 
-let tzOffset=0; // 0=ET (default), -3=PT
+let tzOffset=0;
 function slotFmt(s){return s.m===0?fmt((s.h+tzOffset+24)%24,0):'';}
 function setTz(offset){
   tzOffset=offset;
@@ -297,7 +333,6 @@ function setTz(offset){
   else drawHeat();
 }
 
-// Get Mon–Fri dates for a given week offset (0=current, 1=next, etc.)
 function getWeekDates(offset=0){
   const now=new Date();
   const day=now.getDay();
@@ -313,7 +348,6 @@ function weekLabel(offset){
   return `${dates[0].toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${dates[4].toLocaleDateString('en-US',{month:'short',day:'numeric'})}`;
 }
 
-// Populate week selector
 function populateWeekSel(){
   const sel=document.getElementById('weeksel');
   sel.innerHTML='';
@@ -333,27 +367,26 @@ function hx(n,t){if(!n||!t)return HX[0];return HX[Math.min(Math.ceil(n/t*(HX.len
 let db={};
 let sel=new Set();
 let cname='';
-let calProvider='';  // 'google' | 'microsoft' | ''
-let calBusy={};      // current week's busy slots for the submit grid
+let calProvider='';
+let calBusy={};
 let drag=false,dmode=null;
 
 // ── Supabase helpers ─────────────────────────────────────────
 async function sbGet(){
-  const r=await fetch(`${TABLE}?select=*`,{headers:SB_HEADERS});
+  const r=await fetch(`${TABLE}?team_id=eq.${encodeURIComponent(teamId)}&select=*`,{headers:SB_HEADERS});
   if(!r.ok)throw new Error(await r.text());
   return r.json();
 }
 async function sbSaveCells(name,cells){
-  // Only saves manual cell selections; calendar data is managed by the backend
-  const r=await fetch(`${TABLE}?on_conflict=name`,{
+  const r=await fetch(`${TABLE}?on_conflict=team_id,name`,{
     method:'POST',
     headers:{...SB_HEADERS,'Prefer':'resolution=merge-duplicates'},
-    body:JSON.stringify({name,cells:JSON.stringify(cells),updated_at:new Date().toISOString()})
+    body:JSON.stringify({team_id:teamId,name,cells:JSON.stringify(cells),updated_at:new Date().toISOString()})
   });
   if(!r.ok)throw new Error(await r.text());
 }
 async function sbDelete(name){
-  const r=await fetch(`${TABLE}?name=eq.${encodeURIComponent(name)}`,{method:'DELETE',headers:SB_HEADERS});
+  const r=await fetch(`${TABLE}?team_id=eq.${encodeURIComponent(teamId)}&name=eq.${encodeURIComponent(name)}`,{method:'DELETE',headers:SB_HEADERS});
   if(!r.ok)throw new Error(await r.text());
 }
 
@@ -375,6 +408,26 @@ function parseDb(rows){
   return out;
 }
 
+// ── Landing screen ───────────────────────────────────────────
+async function createTeam(){
+  const name=document.getElementById('teamNameIn').value.trim();
+  if(!name){document.getElementById('teamNameIn').focus();return;}
+  const st=document.getElementById('landingSt');
+  st.textContent='Creating…';st.className='stline busy';
+  try{
+    const r=await fetch(`${BACKEND_URL}/api/teams`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name})
+    });
+    if(!r.ok)throw new Error('Server error '+r.status);
+    const data=await r.json();
+    window.location.href=`${window.location.pathname}?team=${data.id}`;
+  }catch(e){
+    st.textContent='Error: '+e.message;st.className='stline err';
+  }
+}
+
 // ── OAuth — redirect to backend ──────────────────────────────
 function toggleIcsHelp(){
   const el=document.getElementById('icsHelp');
@@ -386,14 +439,12 @@ function toggleIcsHelp(){
 function connectGoogle(){
   if(!cname){setSt('sst','Enter your name first.','err');return;}
   setCalSt('Redirecting to Google…','busy');
-  localStorage.setItem('femmli_name',cname);
-  window.location.href=`${BACKEND_URL}/auth/google?name=${encodeURIComponent(cname)}`;
+  window.location.href=`${BACKEND_URL}/auth/google?name=${encodeURIComponent(cname)}&team_id=${encodeURIComponent(teamId)}`;
 }
 function connectMicrosoft(){
   if(!cname){setSt('sst','Enter your name first.','err');return;}
   setCalSt('Redirecting to Microsoft…','busy');
-  localStorage.setItem('femmli_name',cname);
-  window.location.href=`${BACKEND_URL}/auth/microsoft?name=${encodeURIComponent(cname)}`;
+  window.location.href=`${BACKEND_URL}/auth/microsoft?name=${encodeURIComponent(cname)}&team_id=${encodeURIComponent(teamId)}`;
 }
 
 async function connectIcs(){
@@ -403,7 +454,7 @@ async function connectIcs(){
   const st=document.getElementById('icsStatus');
   st.textContent='Connecting…';st.className='cal-status busy';
   try{
-    const r=await fetch(`${BACKEND_URL}/api/connect-ics`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:cname,icsUrl:url})});
+    const r=await fetch(`${BACKEND_URL}/api/connect-ics`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:cname,icsUrl:url,teamId})});
     const data=await r.json().catch(()=>({}));
     if(!r.ok){throw new Error(data.error||'Server error '+r.status);}
     const rows=await sbGet();db=parseDb(rows);
@@ -423,13 +474,14 @@ async function connectIcs(){
   }catch(e){st.textContent='Connection failed: '+e.message;st.className='cal-status err';}
 }
 
-// Handle return from backend after OAuth (?connected=google&name=X or ?auth_error=...)
+// Handle return from backend after OAuth (?team=X&connected=google&name=Y or ?auth_error=...)
 function handleConnectReturn(){
   const p=new URLSearchParams(window.location.search);
   const connected=p.get('connected');
   const name=p.get('name');
   const authError=p.get('auth_error');
-  history.replaceState(null,'',window.location.pathname);
+  // Strip OAuth params but keep ?team=
+  history.replaceState(null,'',`${window.location.pathname}?team=${teamId}`);
   if(authError){
     if(name){cname=name;document.getElementById('nameIn').value=name;}
     document.getElementById('submit-body').style.display='block';
@@ -440,8 +492,6 @@ function handleConnectReturn(){
   if(connected&&name){
     cname=name;calProvider=connected;
     document.getElementById('nameIn').value=name;
-    localStorage.setItem('femmli_name',name);
-    localStorage.setItem('femmli_provider',connected);
     return 'connected';
   }
   return false;
@@ -452,10 +502,9 @@ function initSubmit(){
   const n=document.getElementById('nameIn').value.trim();
   if(!n){document.getElementById('nameIn').focus();return;}
   cname=n;
-  // Restore calProvider from Supabase data if already connected
+  localStorage.setItem('ta_name_'+teamId,n);
   const ex=db[n.toLowerCase()];
   calProvider=(ex&&ex.cal_provider)||'';
-  // Set calBusy from stored week-0 data so hatching shows correctly
   calBusy={};
   if(ex){
     const gb=(ex.google_busy&&ex.google_busy['0'])||{};
@@ -474,7 +523,6 @@ function initSubmit(){
 function updateCalBtns(){
   const gBtn=document.getElementById('gBtn');
   const msBtn=document.getElementById('msBtn');
-  const wrap=document.getElementById('calBtnWrap');
   const ex=db[cname.toLowerCase()];
   const accounts=ex&&ex.cal_accounts?ex.cal_accounts:{};
   const gEmails=Array.isArray(accounts.google)?accounts.google:[];
@@ -486,7 +534,7 @@ function updateCalBtns(){
   const gIcon=`<svg class="gicon" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>`;
   const mIcon=`<svg class="msicon" viewBox="0 0 24 24"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#00a4ef" d="M13 1h10v10H13z"/><path fill="#7fba00" d="M1 13h10v10H1z"/><path fill="#ffb900" d="M13 13h10v10H13z"/></svg>`;
 
-  function makeConnectedBtn(btn, icon, emails, addMore){
+  function makeConnectedBtn(btn,icon,emails,addMore){
     const label=emails.length===1?emails[0]:emails.length>1?`${emails.length} accounts connected`:'connected';
     btn.className='btn connected';
     btn.style.cssText='flex-direction:column;align-items:flex-start;gap:1px;';
@@ -556,7 +604,7 @@ async function loadDash(refreshCals=false){
     if(btn){btn.textContent='Refreshing…';btn.disabled=true;}
     if(rfst){rfst.textContent='';rfst.className='stline';}
     try{
-      const r=await fetch(`${BACKEND_URL}/api/refresh`,{method:'POST'});
+      const r=await fetch(`${BACKEND_URL}/api/refresh`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({teamId})});
       if(!r.ok){let msg='Server error '+r.status;try{const d=await r.json();if(d.error)msg=d.error;}catch(e){}throw new Error(msg);}
       const data=await r.json();
       const ok=data.results?.filter(x=>x.ok).length??0;
@@ -583,7 +631,6 @@ async function loadDash(refreshCals=false){
   renderDash();
 }
 
-// Week-aware: google_busy/microsoft_busy are now {"0":{...},"1":{...},...}
 function getMergedBusy(person,weekOffset){
   const wo=String(weekOffset||0);
   const gb=(person.google_busy&&person.google_busy[wo])||{};
@@ -701,12 +748,31 @@ function go(id){
 
 // ── Init ─────────────────────────────────────────────────────
 async function init(){
+  if(!teamId){
+    // No team — show landing page only
+    document.getElementById('bnav').style.display='none';
+    return;
+  }
+
+  // Load team name for topbar
+  fetch(`${SB_URL}/rest/v1/teams?id=eq.${encodeURIComponent(teamId)}&select=name`,{headers:SB_HEADERS})
+    .then(r=>r.json()).then(rows=>{
+      if(rows.length){
+        const name=rows[0].name;
+        document.getElementById('topbarLogo').textContent=name+' — Scheduling';
+        document.title=name+' — Availability';
+      }
+    }).catch(()=>{});
+
+  // Switch to app screens
+  document.getElementById('s-landing').classList.remove('on');
+  document.getElementById('s-submit').classList.add('on');
+
   populateWeekSel();
   try{const rows=await sbGet();db=parseDb(rows);}catch(e){}
 
   const wasReturn=handleConnectReturn();
   if(wasReturn==='connected'&&cname){
-    // Reload db so we have fresh data after backend saved it
     try{const rows=await sbGet();db=parseDb(rows);}catch(e){}
     const ex=db[cname.toLowerCase()];
     if(ex){
@@ -723,8 +789,7 @@ async function init(){
     setCalSt(`${calProvider==='google'?'Google':'Microsoft'} calendar connected ✓`,'ok');
     setSt('sst','Calendar connected — your availability is live on the dashboard.','ok');
   }else{
-    // Restore name from localStorage for convenience
-    const savedName=localStorage.getItem('femmli_name');
+    const savedName=localStorage.getItem(`ta_name_${teamId}`);
     if(savedName){document.getElementById('nameIn').value=savedName;}
     buildSGrid(0);
   }
