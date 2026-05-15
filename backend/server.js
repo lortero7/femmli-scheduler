@@ -406,18 +406,43 @@ async function getNewMicrosoftToken(refreshToken) {
   return data.access_token;
 }
 
+// ── Slug helpers ─────────────────────────────────────────────
+function toSlug(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'team';
+}
+
+async function generateUniqueSlug(name) {
+  const base = toSlug(name);
+  const rows = await sbFetch(`teams?slug=eq.${encodeURIComponent(base)}&select=id`);
+  if (!rows.length) return base;
+  for (let i = 2; i <= 99; i++) {
+    const candidate = `${base}-${i}`;
+    const r = await sbFetch(`teams?slug=eq.${encodeURIComponent(candidate)}&select=id`);
+    if (!r.length) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+}
+
+async function getTeamSlug(teamId) {
+  try {
+    const rows = await sbFetch(`teams?id=eq.${encodeURIComponent(teamId)}&select=slug`);
+    return rows.length && rows[0].slug ? rows[0].slug : teamId;
+  } catch { return teamId; }
+}
+
 // ── Teams ────────────────────────────────────────────────────
 app.post('/api/teams', async (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Missing team name' });
   const id = randomUUID();
+  const slug = await generateUniqueSlug(name.trim());
   const r = await fetch(`${SUPABASE_URL}/rest/v1/teams`, {
     method: 'POST',
     headers: { ...sbHeaders, 'Prefer': 'return=representation' },
-    body: JSON.stringify({ id, name: name.trim(), created_at: new Date().toISOString() })
+    body: JSON.stringify({ id, name: name.trim(), slug, created_at: new Date().toISOString() })
   });
   if (!r.ok) return res.status(500).json({ error: 'Failed to create team: ' + await r.text() });
-  res.json({ id, name: name.trim() });
+  res.json({ id, name: name.trim(), slug });
 });
 
 // ── Google OAuth ─────────────────────────────────────────────
@@ -439,8 +464,9 @@ app.get('/auth/google', (req, res) => {
 app.get('/auth/google/callback', async (req, res) => {
   const { code, state: stateRaw, error } = req.query;
   const { name, teamId } = decodeState(stateRaw);
-  const redirectBase = `${FRONTEND_URL}?team=${encodeURIComponent(teamId)}`;
-  if (error) return res.redirect(`${redirectBase}&auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name)}`);
+  const slug = await getTeamSlug(teamId);
+  const redirectBase = `${FRONTEND_URL}/${encodeURIComponent(slug)}`;
+  if (error) return res.redirect(`${redirectBase}?auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name)}`);
   try {
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
@@ -460,7 +486,7 @@ app.get('/auth/google/callback', async (req, res) => {
     await saveToken(teamId, name, 'google', JSON.stringify(existing));
     await updateCalAccounts(teamId, name, 'google', existing.map(t => t.email).filter(Boolean));
     await refreshUser(teamId, name, 'google', existing);
-    res.redirect(`${redirectBase}&connected=google&name=${encodeURIComponent(name)}`);
+    res.redirect(`${redirectBase}?connected=google&name=${encodeURIComponent(name)}`);
   } catch (e) {
     console.error('Google callback error:', e);
     res.redirect(`${redirectBase}&auth_error=${encodeURIComponent(e.message)}&name=${encodeURIComponent(name)}`);
@@ -484,8 +510,9 @@ app.get('/auth/microsoft', (req, res) => {
 app.get('/auth/microsoft/callback', async (req, res) => {
   const { code, state: stateRaw, error } = req.query;
   const { name, teamId } = decodeState(stateRaw);
-  const redirectBase = `${FRONTEND_URL}?team=${encodeURIComponent(teamId)}`;
-  if (error) return res.redirect(`${redirectBase}&auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name)}`);
+  const slug = await getTeamSlug(teamId);
+  const redirectBase = `${FRONTEND_URL}/${encodeURIComponent(slug)}`;
+  if (error) return res.redirect(`${redirectBase}?auth_error=${encodeURIComponent(error)}&name=${encodeURIComponent(name)}`);
   try {
     const tokenRes = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
       method: 'POST',
@@ -504,7 +531,7 @@ app.get('/auth/microsoft/callback', async (req, res) => {
     await saveToken(teamId, name, 'microsoft', JSON.stringify(existing));
     await updateCalAccounts(teamId, name, 'microsoft', existing.map(t => t.email).filter(Boolean));
     await refreshUser(teamId, name, 'microsoft', existing);
-    res.redirect(`${redirectBase}&connected=microsoft&name=${encodeURIComponent(name)}`);
+    res.redirect(`${redirectBase}?connected=microsoft&name=${encodeURIComponent(name)}`);
   } catch (e) {
     console.error('Microsoft callback error:', e);
     res.redirect(`${redirectBase}&auth_error=${encodeURIComponent(e.message)}&name=${encodeURIComponent(name)}`);

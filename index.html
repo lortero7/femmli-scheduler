@@ -315,8 +315,9 @@ const SB_HEADERS = {'Content-Type':'application/json','apikey':SB_KEY,'Authoriza
 const TABLE = `${SB_URL}/rest/v1/availability`;
 const BACKEND_URL = 'https://team-availability-production.up.railway.app';
 
-// Extracted from URL at page load — null means show landing screen
-const teamId = new URLSearchParams(window.location.search).get('team');
+// Slug from URL path (e.g. guiocal.com/femmli → "femmli"); null means show landing
+const slug = window.location.pathname.replace(/^\/+|\/+$/g, '') || null;
+let teamId = null; // UUID, resolved from slug in init()
 
 // ── Time constants ───────────────────────────────────────────
 const DAYS = ['Mon','Tue','Wed','Thu','Fri'];
@@ -422,7 +423,7 @@ async function createTeam(){
     });
     if(!r.ok)throw new Error('Server error '+r.status);
     const data=await r.json();
-    window.location.href=`${window.location.pathname}?team=${data.id}`;
+    window.location.href=`/${data.slug}`;
   }catch(e){
     st.textContent='Error: '+e.message;st.className='stline err';
   }
@@ -480,8 +481,7 @@ function handleConnectReturn(){
   const connected=p.get('connected');
   const name=p.get('name');
   const authError=p.get('auth_error');
-  // Strip OAuth params but keep ?team=
-  history.replaceState(null,'',`${window.location.pathname}?team=${teamId}`);
+  history.replaceState(null,'',window.location.pathname);
   if(authError){
     if(name){cname=name;document.getElementById('nameIn').value=name;}
     document.getElementById('submit-body').style.display='block';
@@ -748,21 +748,20 @@ function go(id){
 
 // ── Init ─────────────────────────────────────────────────────
 async function init(){
-  if(!teamId){
-    // No team — show landing page only
+  if(!slug){
+    // No slug — show landing page only
     document.getElementById('bnav').style.display='none';
     return;
   }
 
-  // Load team name for topbar
-  fetch(`${SB_URL}/rest/v1/teams?id=eq.${encodeURIComponent(teamId)}&select=name`,{headers:SB_HEADERS})
-    .then(r=>r.json()).then(rows=>{
-      if(rows.length){
-        const name=rows[0].name;
-        document.getElementById('topbarLogo').textContent=name+' — Scheduling';
-        document.title=name+' — Availability';
-      }
-    }).catch(()=>{});
+  // Resolve slug → UUID and load team name
+  try{
+    const rows=await fetch(`${SB_URL}/rest/v1/teams?slug=eq.${encodeURIComponent(slug)}&select=id,name`,{headers:SB_HEADERS}).then(r=>r.json());
+    if(!rows.length){document.getElementById('bnav').style.display='none';return;}
+    teamId=rows[0].id;
+    document.getElementById('topbarLogo').textContent=rows[0].name+' — Scheduling';
+    document.title=rows[0].name+' — Availability';
+  }catch(e){document.getElementById('bnav').style.display='none';return;}
 
   // Switch to app screens
   document.getElementById('s-landing').classList.remove('on');
