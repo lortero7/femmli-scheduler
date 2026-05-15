@@ -12,6 +12,7 @@ const {
   SUPABASE_URL, SUPABASE_SERVICE_KEY,
   BACKEND_URL,
   FRONTEND_URL = 'https://lortero7.github.io/team-availability',
+  ADMIN_KEY,
   PORT = 3000
 } = process.env;
 
@@ -594,6 +595,57 @@ app.post('/api/connect-ics', async (req, res) => {
     res.json({ ok: true, count: urls.length });
   } catch (e) {
     console.error('ICS connect error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Admin ────────────────────────────────────────────────────
+function requireAdmin(req, res) {
+  if (!ADMIN_KEY || req.headers['x-admin-key'] !== ADMIN_KEY) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/admin/teams', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const [teams, avail] = await Promise.all([
+      sbFetch('teams?select=id,name,slug,created_at&order=created_at.desc'),
+      sbFetch('availability?select=team_id,name,updated_at')
+    ]);
+    const byTeam = {};
+    avail.forEach(a => {
+      if (!byTeam[a.team_id]) byTeam[a.team_id] = { count: 0, lastActive: null };
+      byTeam[a.team_id].count++;
+      if (!byTeam[a.team_id].lastActive || a.updated_at > byTeam[a.team_id].lastActive)
+        byTeam[a.team_id].lastActive = a.updated_at;
+    });
+    res.json(teams.map(t => ({
+      id: t.id, name: t.name, slug: t.slug, createdAt: t.created_at,
+      memberCount: byTeam[t.id]?.count || 0,
+      lastActive: byTeam[t.id]?.lastActive || null
+    })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/admin/teams/:id', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const { id } = req.params;
+  try {
+    for (const path of [
+      `tokens?team_id=eq.${encodeURIComponent(id)}`,
+      `availability?team_id=eq.${encodeURIComponent(id)}`,
+      `teams?id=eq.${encodeURIComponent(id)}`
+    ]) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: 'DELETE', headers: sbHeaders });
+      if (!r.ok) throw new Error(`Delete ${path}: ${await r.text()}`);
+    }
+    res.json({ ok: true });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });

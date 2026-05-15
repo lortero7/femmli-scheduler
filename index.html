@@ -154,6 +154,22 @@ select{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid 
   .shell{padding:1.25rem 1rem;}
   h1{font-size:20px;}
 }
+
+/* admin */
+input[type=password]{font-family:var(--sans);font-size:14px;padding:9px 13px;border:1px solid var(--bdrS);border-radius:var(--r);background:var(--srf);color:var(--tx);width:100%;max-width:280px;outline:none;transition:border-color .15s,box-shadow .15s;}
+input[type=password]:focus{border-color:var(--ac);box-shadow:0 0 0 3px rgba(43,92,58,.1);}
+.admin-search{font-family:var(--sans);font-size:13px;padding:7px 11px;border:1px solid var(--bdrS);border-radius:var(--r);background:var(--srf);color:var(--tx);outline:none;width:190px;}
+.admin-search:focus{border-color:var(--ac);box-shadow:0 0 0 3px rgba(43,92,58,.1);}
+.admin-table{width:100%;border-collapse:collapse;}
+.admin-table th{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--txM);padding:7px 10px;text-align:left;border-bottom:2px solid var(--bdr);font-weight:400;}
+.admin-table td{padding:10px;border-bottom:1px solid var(--bdr);vertical-align:middle;font-size:13px;}
+.admin-table tr:last-child td{border-bottom:none;}
+.admin-table tbody tr:hover td{background:var(--bg);}
+.admin-meta{font-family:var(--mono);font-size:11px;color:var(--txM);}
+.tlink{color:var(--ac);text-decoration:none;font-family:var(--mono);font-size:11px;}
+.tlink:hover{text-decoration:underline;}
+.btn.danger{color:#a03030;border-color:#ddb0b0;}
+.btn.danger:hover{background:#fdf0f0;border-color:#a03030;}
 </style>
 </head>
 <body>
@@ -298,12 +314,50 @@ select{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid 
     </div>
     <div id="dempty" class="empty" style="display:none;">No availability data yet.</div>
   </div>
+
+  <!-- ADMIN -->
+  <div id="s-admin" class="scr">
+    <div id="admin-login">
+      <h1>Admin</h1>
+      <p class="sub">Enter your admin key to manage team instances.</p>
+      <div style="max-width:320px;">
+        <input type="password" id="adminKeyIn" placeholder="Admin key" maxlength="200" onkeydown="if(event.key==='Enter')adminLogin()" style="margin-bottom:8px;"/>
+        <button class="btn pri" onclick="adminLogin()">Sign in</button>
+        <div id="adminLoginSt" class="stline"></div>
+      </div>
+    </div>
+    <div id="admin-panel" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:1.5rem;">
+        <div>
+          <h1>Admin <span id="adminCount" style="font-size:16px;font-weight:400;color:var(--txM);"></span></h1>
+          <p class="sub" style="margin:0;">Manage all team instances.</p>
+        </div>
+        <div class="row">
+          <input class="admin-search" id="adminSearch" placeholder="Search…" oninput="filterAdmin()"/>
+          <button class="btn sm gh" onclick="loadAdmin()">&#8635; Refresh</button>
+          <button class="btn sm gh" onclick="adminLogout()">Sign out</button>
+        </div>
+      </div>
+      <div id="adminSt" class="stline" style="margin-bottom:.75rem;min-height:18px;"></div>
+      <div style="overflow-x:auto;">
+        <table class="admin-table">
+          <thead><tr>
+            <th>Team</th><th>Slug</th><th>Created</th><th>Last active</th><th>Members</th><th></th>
+          </tr></thead>
+          <tbody id="adminTbody"></tbody>
+        </table>
+      </div>
+      <div id="adminEmpty" class="empty" style="display:none;">No teams found.</div>
+    </div>
+  </div>
 </div>
 
 <div class="bnav" id="bnav">
   <div class="binner">
-    <button class="ntab on" id="nt-submit" onclick="go('submit')">My availability</button>
-    <button class="ntab" id="nt-dash" onclick="go('dash')">Dashboard</button>
+    <button class="ntab on" id="nt-landing" onclick="go('landing')">New team</button>
+    <button class="ntab" id="nt-admin" onclick="go('admin')">Admin</button>
+    <button class="ntab" id="nt-submit" onclick="go('submit')" style="display:none;">My availability</button>
+    <button class="ntab" id="nt-dash" onclick="go('dash')" style="display:none;">Dashboard</button>
   </div>
 </div>
 
@@ -742,17 +796,26 @@ function go(id){
   document.querySelectorAll('.scr').forEach(s=>s.classList.remove('on'));
   document.getElementById('s-'+id).classList.add('on');
   document.querySelectorAll('.ntab').forEach(t=>t.classList.remove('on'));
-  document.getElementById('nt-'+id).classList.add('on');
+  const nt=document.getElementById('nt-'+id);
+  if(nt)nt.classList.add('on');
   if(id==='dash')loadDash();
+  if(id==='admin')goAdmin();
 }
 
 // ── Init ─────────────────────────────────────────────────────
 async function init(){
   if(!slug){
-    // No slug — show landing page only
-    document.getElementById('bnav').style.display='none';
+    // Landing page — show landing/admin tabs, hide team tabs
+    document.getElementById('nt-submit').style.display='none';
+    document.getElementById('nt-dash').style.display='none';
     return;
   }
+  // Team page — hide landing/admin tabs, show team tabs
+  document.getElementById('nt-landing').style.display='none';
+  document.getElementById('nt-admin').style.display='none';
+  document.getElementById('nt-submit').style.display='';
+  document.getElementById('nt-submit').classList.add('on');
+  document.getElementById('nt-dash').style.display='';
 
   // Resolve slug → UUID and load team name
   try{
@@ -792,6 +855,123 @@ async function init(){
     if(savedName){document.getElementById('nameIn').value=savedName;}
     buildSGrid(0);
   }
+}
+
+// ── Admin ────────────────────────────────────────────────────
+let adminKey=localStorage.getItem('ta_admin_key')||'';
+let adminTeams=[];
+
+function goAdmin(){
+  if(adminKey){
+    document.getElementById('admin-login').style.display='none';
+    document.getElementById('admin-panel').style.display='block';
+    loadAdmin();
+  }
+}
+
+async function adminLogin(){
+  const key=document.getElementById('adminKeyIn').value.trim();
+  if(!key){setSt('adminLoginSt','Enter your admin key.','err');return;}
+  setSt('adminLoginSt','Verifying…','busy');
+  try{
+    const r=await fetch(`${BACKEND_URL}/api/admin/teams`,{headers:{'x-admin-key':key}});
+    if(r.status===401){setSt('adminLoginSt','Invalid admin key.','err');return;}
+    if(!r.ok)throw new Error('Server error '+r.status);
+    adminKey=key;
+    localStorage.setItem('ta_admin_key',key);
+    adminTeams=await r.json();
+    document.getElementById('admin-login').style.display='none';
+    document.getElementById('admin-panel').style.display='block';
+    renderAdminTable();
+  }catch(e){setSt('adminLoginSt','Error: '+e.message,'err');}
+}
+
+function adminLogout(){
+  adminKey='';
+  localStorage.removeItem('ta_admin_key');
+  document.getElementById('admin-login').style.display='block';
+  document.getElementById('admin-panel').style.display='none';
+  document.getElementById('adminKeyIn').value='';
+  setSt('adminLoginSt','','');
+}
+
+async function loadAdmin(){
+  setSt('adminSt','Loading…','busy');
+  try{
+    const r=await fetch(`${BACKEND_URL}/api/admin/teams`,{headers:{'x-admin-key':adminKey}});
+    if(r.status===401){adminLogout();return;}
+    if(!r.ok)throw new Error('Server error '+r.status);
+    adminTeams=await r.json();
+    renderAdminTable();
+    setSt('adminSt','','');
+  }catch(e){setSt('adminSt','Error: '+e.message,'err');}
+}
+
+async function deleteTeam(id,name){
+  if(!confirm(`Delete "${name}" and all its data?\n\nThis cannot be undone.`))return;
+  setSt('adminSt',`Deleting "${name}"…`,'busy');
+  try{
+    const r=await fetch(`${BACKEND_URL}/api/admin/teams/${encodeURIComponent(id)}`,{
+      method:'DELETE',headers:{'x-admin-key':adminKey}
+    });
+    if(!r.ok)throw new Error('Server error '+r.status);
+    adminTeams=adminTeams.filter(t=>t.id!==id);
+    renderAdminTable();
+    setSt('adminSt',`"${name}" deleted.`,'ok');
+  }catch(e){setSt('adminSt','Error: '+e.message,'err');}
+}
+
+function relTime(iso){
+  if(!iso)return'—';
+  const d=Math.floor((Date.now()-new Date(iso).getTime())/86400000);
+  if(d===0)return'today';if(d===1)return'yesterday';
+  if(d<30)return`${d}d ago`;
+  const mo=Math.floor(d/30);
+  return mo<12?`${mo}mo ago`:`${Math.floor(mo/12)}yr ago`;
+}
+
+function filterAdmin(){
+  const q=document.getElementById('adminSearch').value.toLowerCase();
+  let shown=0;
+  document.querySelectorAll('#adminTbody tr').forEach(tr=>{
+    const match=!q||tr.dataset.name.includes(q)||tr.dataset.slug.includes(q);
+    tr.style.display=match?'':'none';
+    if(match)shown++;
+  });
+  document.getElementById('adminEmpty').style.display=shown===0?'block':'none';
+}
+
+function renderAdminTable(){
+  const tbody=document.getElementById('adminTbody');
+  tbody.innerHTML='';
+  const n=adminTeams.length;
+  document.getElementById('adminCount').textContent=`— ${n} team${n!==1?'s':''}`;
+  document.getElementById('adminEmpty').style.display=n===0?'block':'none';
+  adminTeams.forEach(t=>{
+    const tr=document.createElement('tr');
+    tr.dataset.name=t.name.toLowerCase();
+    tr.dataset.slug=t.slug.toLowerCase();
+
+    const created=t.createdAt?new Date(t.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
+
+    const tdName=document.createElement('td');
+    const strong=document.createElement('strong');strong.textContent=t.name;tdName.appendChild(strong);
+
+    const tdSlug=document.createElement('td');
+    const a=document.createElement('a');a.href='/'+t.slug;a.target='_blank';a.className='tlink';a.textContent=t.slug;tdSlug.appendChild(a);
+
+    const tdCreated=document.createElement('td');tdCreated.className='admin-meta';tdCreated.textContent=created;
+    const tdActive=document.createElement('td');tdActive.className='admin-meta';tdActive.textContent=relTime(t.lastActive);
+    const tdMembers=document.createElement('td');tdMembers.className='admin-meta';tdMembers.textContent=t.memberCount;
+
+    const tdAct=document.createElement('td');
+    const btn=document.createElement('button');btn.className='btn sm danger';btn.textContent='Delete';
+    btn.addEventListener('click',()=>deleteTeam(t.id,t.name));
+    tdAct.appendChild(btn);
+
+    tr.append(tdName,tdSlug,tdCreated,tdActive,tdMembers,tdAct);
+    tbody.appendChild(tr);
+  });
 }
 
 init();
