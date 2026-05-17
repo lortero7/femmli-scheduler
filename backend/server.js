@@ -307,14 +307,31 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
   const fridayStr = dates[4].toISOString().split('T')[0];
   const timeMin = new Date(`${mondayStr}T08:00:00${easternOffsetStr(getEasternOffset(dates[0]))}`);
   const timeMax = new Date(`${fridayStr}T21:00:00${easternOffsetStr(getEasternOffset(dates[4]))}`);
+
+  let calendarItems = [{ id: 'primary' }];
+  try {
+    const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader', {
+      headers: { 'Authorization': 'Bearer ' + accessToken }
+    });
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      const ids = (listData.items || [])
+        .filter(cal => cal.selected !== false && !cal.hidden)
+        .map(cal => ({ id: cal.id }));
+      if (ids.length) calendarItems = ids;
+    }
+  } catch (e) {
+    console.error('Google calendarList failed, falling back to primary:', e.message);
+  }
+
   const r = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), items: [{ id: 'primary' }] })
+    body: JSON.stringify({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), items: calendarItems })
   });
   if (!r.ok) throw new Error('Google freeBusy: ' + r.status + ' ' + await r.text());
   const data = await r.json();
-  const allPeriods = data.calendars?.primary?.busy || [];
+  const allPeriods = Object.values(data.calendars || {}).flatMap(cal => cal.busy || []);
   const timedPeriods = allPeriods.filter(p => new Date(p.end) - new Date(p.start) < 24 * 3600 * 1000);
   return busyPeriodsToSlots(timedPeriods, dates);
 }
@@ -454,7 +471,7 @@ app.get('/auth/google', (req, res) => {
     client_id: GOOGLE_CLIENT_ID,
     redirect_uri: GOOGLE_REDIRECT,
     response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/calendar.freebusy openid email',
+    scope: 'https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.calendarlist.readonly openid email',
     access_type: 'offline',
     prompt: 'consent',
     state: encodeState(name, teamId)
