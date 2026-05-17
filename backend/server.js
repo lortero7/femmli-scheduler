@@ -315,9 +315,7 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
     });
     if (listRes.ok) {
       const listData = await listRes.json();
-      const ids = (listData.items || [])
-        .filter(cal => cal.selected !== false && !cal.hidden)
-        .map(cal => ({ id: cal.id }));
+      const ids = (listData.items || []).map(cal => ({ id: cal.id }));
       if (ids.length) calendarItems = ids;
     }
   } catch (e) {
