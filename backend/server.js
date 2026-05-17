@@ -308,32 +308,46 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
   const timeMin = new Date(`${mondayStr}T08:00:00${easternOffsetStr(getEasternOffset(dates[0]))}`);
   const timeMax = new Date(`${fridayStr}T21:00:00${easternOffsetStr(getEasternOffset(dates[4]))}`);
 
-  let calendarItems = [{ id: 'primary' }];
+  // Fetch all calendars, then use the Events API (not FreeBusy) so that
+  // transparent events like Gmail-auto-created flights are included.
+  let calendarIds = ['primary'];
   try {
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader', {
       headers: { 'Authorization': 'Bearer ' + accessToken }
     });
     if (listRes.ok) {
       const listData = await listRes.json();
-      const ids = (listData.items || []).map(cal => ({ id: cal.id }));
-      console.log('[Google calendarList] calendars:', JSON.stringify((listData.items || []).map(c => ({ id: c.id, summary: c.summary, selected: c.selected, accessRole: c.accessRole }))));
-      if (ids.length) calendarItems = ids;
-    } else {
-      console.error('[Google calendarList] failed:', listRes.status, await listRes.text());
+      const ids = (listData.items || []).map(cal => cal.id);
+      if (ids.length) calendarIds = ids;
     }
   } catch (e) {
     console.error('Google calendarList failed, falling back to primary:', e.message);
   }
 
-  const r = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), items: calendarItems })
-  });
-  if (!r.ok) throw new Error('Google freeBusy: ' + r.status + ' ' + await r.text());
-  const data = await r.json();
-  console.log('[Google freeBusy] raw response:', JSON.stringify(data));
-  const allPeriods = Object.values(data.calendars || {}).flatMap(cal => cal.busy || []);
+  const allPeriods = [];
+  for (const calId of calendarIds) {
+    try {
+      const params = new URLSearchParams({
+        timeMin: timeMin.toISOString(),
+        timeMax: timeMax.toISOString(),
+        singleEvents: 'true',
+        maxResults: '2500'
+      });
+      const evRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?${params}`, {
+        headers: { 'Authorization': 'Bearer ' + accessToken }
+      });
+      if (!evRes.ok) continue;
+      const evData = await evRes.json();
+      for (const ev of evData.items || []) {
+        if (ev.status === 'cancelled') continue;
+        if (!ev.start?.dateTime) continue; // skip all-day events
+        allPeriods.push({ start: ev.start.dateTime, end: ev.end.dateTime });
+      }
+    } catch (e) {
+      console.error(`Google events fetch failed for ${calId}:`, e.message);
+    }
+  }
+
   const timedPeriods = allPeriods.filter(p => new Date(p.end) - new Date(p.start) < 24 * 3600 * 1000);
   return busyPeriodsToSlots(timedPeriods, dates);
 }
@@ -473,7 +487,7 @@ app.get('/auth/google', (req, res) => {
     client_id: GOOGLE_CLIENT_ID,
     redirect_uri: GOOGLE_REDIRECT,
     response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.calendarlist.readonly openid email',
+    scope: 'https://www.googleapis.com/auth/calendar.readonly openid email',
     access_type: 'offline',
     prompt: 'consent',
     state: encodeState(name, teamId)
