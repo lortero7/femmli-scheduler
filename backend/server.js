@@ -316,7 +316,10 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
     if (listRes.ok) {
       const listData = await listRes.json();
       const ids = (listData.items || []).map(cal => ({ id: cal.id }));
+      console.log('[Google calendarList] calendars:', JSON.stringify((listData.items || []).map(c => ({ id: c.id, summary: c.summary, selected: c.selected, accessRole: c.accessRole }))));
       if (ids.length) calendarItems = ids;
+    } else {
+      console.error('[Google calendarList] failed:', listRes.status, await listRes.text());
     }
   } catch (e) {
     console.error('Google calendarList failed, falling back to primary:', e.message);
@@ -329,6 +332,7 @@ async function fetchGoogleBusy(accessToken, weekOffset) {
   });
   if (!r.ok) throw new Error('Google freeBusy: ' + r.status + ' ' + await r.text());
   const data = await r.json();
+  console.log('[Google freeBusy] raw response:', JSON.stringify(data));
   const allPeriods = Object.values(data.calendars || {}).flatMap(cal => cal.busy || []);
   const timedPeriods = allPeriods.filter(p => new Date(p.end) - new Date(p.start) < 24 * 3600 * 1000);
   return busyPeriodsToSlots(timedPeriods, dates);
